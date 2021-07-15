@@ -1,0 +1,3 @@
+path=data
+result=./
+batch=5000

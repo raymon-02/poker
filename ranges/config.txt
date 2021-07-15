@@ -1,0 +1,5 @@
+path=data/123145
+result=result
+intervals=11,25,60
+names=MagXedin,noSki1ls
+stack=10.8
