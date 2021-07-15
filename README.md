@@ -1,2 +1,3 @@
-# poker
-poker utils
+# Poker
+
+Poker utils
