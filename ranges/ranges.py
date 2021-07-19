@@ -81,8 +81,8 @@ class FileStructure:
                 stack_chips = list(map(lambda s: s.chips, stacks))
                 info_lines.append("  Stack avg: {:0.3f}\n".format(mean(stack_values)))
                 info_lines.append("  Stack med: {:0.3f}\n".format(median(stack_values)))
-                info_lines.append("  Stack chips avg {:0.3f}\n".format(mean(stack_chips)))
-                info_lines.append("  Stack chips avg {:0.3f}\n".format(median(stack_chips)))
+                info_lines.append("  Stack chips avg: {:0.3f}\n".format(mean(stack_chips)))
+                info_lines.append("  Stack chips med: {:0.3f}\n".format(median(stack_chips)))
 
             rel = range_eliminates[r.max]
             wins = range_wins[r.max]
@@ -107,7 +107,10 @@ class FileStructure:
                 win_count = len(list(filter(lambda w: w, wins)))
                 srv = sum(rel_values)
                 srp = sum(rel_possibles)
-                info_lines.append("  Lost bounties : {:0.2f}%   ({:0.2f}/{:0.2f})\n".format(srv / srp * 100, srv, srp))
+                info_lines.append(
+                    "  Eliminates avg: {:0.2f}%   ({}/{})\n".format(len(rel) / len(wins) * 100, len(rel), len(wins))
+                )
+                info_lines.append("  Lost bounties: {:0.2f}%   ({:0.2f}/{:0.2f})\n".format(srv / srp * 100, srv, srp))
                 info_lines.append("  Win bounty avg: {:0.3f}\n".format(mean(rel_values)))
                 info_lines.append("  Win bounty med: {:0.3f}\n".format(median(rel_values)))
                 info_lines.append(
@@ -139,7 +142,6 @@ class FileStructure:
         player_stack = self.__get_player_stack__(seats, players)
 
         div = 5 if round(bounties_avg, 2) > stack else 4
-        # div = 5 if bounties_avg > stack else 4
         hand_stats = self.__parse_hand_stat__(gf, players, div)
         eliminates = list(map(lambda h: h.eliminate, hand_stats))
         win = any(map(lambda h: h.win, hand_stats))
