@@ -108,7 +108,7 @@ class FileStructure:
                 srv = sum(rel_values)
                 srp = sum(rel_possibles)
                 info_lines.append(
-                    "  Eliminates avg: {:0.2f}%   ({}/{})\n".format(len(rel) / len(wins) * 100, len(rel), len(wins))
+                    "  Eliminates avg: {:0.3f}   ({}/{})\n".format(len(rel) / len(wins) * 100, len(rel), len(wins))
                 )
                 info_lines.append("  Lost bounties: {:0.2f}%   ({:0.2f}/{:0.2f})\n".format(srv / srp * 100, srv, srp))
                 info_lines.append("  Win bounty avg: {:0.3f}\n".format(mean(rel_values)))
@@ -212,7 +212,7 @@ class FileStructure:
             multipliers = []
             for eliminate_line in eliminate_lines:
                 i = eliminate_line.index("wins")
-                win_bounty = float(eliminate_line[i + 1][1:])
+                win_bounty = float(self.__get_num__(eliminate_line[i + 1]))
                 j = eliminate_line.index("eliminating")
                 bounty = bounties[eliminate_line[j + 1]]
                 win_bounties.append(win_bounty)
@@ -228,16 +228,22 @@ class FileStructure:
         except (ValueError, IndexError, KeyError):
             return HandStat(Eliminate([], [], []), False)
 
-    @staticmethod
-    def __get_bounty__(seat):
+    def __get_bounty__(self, seat):
         try:
             parts = seat.strip().split()
             for i, part in enumerate(parts):
                 if "bounty" in part and part.endswith(")") and "chip" in parts[i - 2]:
-                    return float(parts[i - 1][1:])
+                    return float(self.__get_num__(parts[i - 1]))
             return -1
         except (ValueError, IndexError):
             return -1
+
+    @staticmethod
+    def __get_num__(s):
+        i = 0
+        while i < len(s) and not s[i].isdigit():
+            i += 1
+        return s[i:]
 
     def __get_player_stack__(self, seats, players):
         for seat in seats:
