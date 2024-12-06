@@ -1,0 +1,16 @@
+data=data/2024
+tsdata=data/2024
+colormarkers=data/ColorMarkers
+result=result
+nicknames=MagXedin,noSki1ls
+recalc=true
+calcdata=data/2024
+calctsdata=data/2024
+calcmode=tables
+regtables=100
+reghands=200
+interval=20230701-20250731
+buyin=all
+report=false
+sort=false
+xa=true
