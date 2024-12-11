@@ -199,6 +199,9 @@ class IndexCreator:
             if i % mod == 0:
                 logging.info("Getting table from {}/{} files...".format(i, len(files_to_index)))
             table_data = IndexCreator.__get_table_data__(file_to_index.tsdata_file)
+            if not table_data:
+                logging.warning("Cannot get table data from TS file. Skipping: {}".format(file_to_index.tsdata_file))
+                continue
             players, xa = self.__get_players__(file_to_index.data_files)
             tables.append(Table(file_to_index.id, table_data, players, xa))
 
@@ -245,6 +248,9 @@ class IndexCreator:
                 prize_pool = parse_prize_pool(line)
             elif line.startswith("Tournament started"):
                 timestamp = parse_tournament_started(line)
+
+        if buy_in is None or prize_pool is None or timestamp is None:
+            return None
 
         return TableData(timestamp, prize_pool, buy_in)
 
@@ -323,7 +329,7 @@ class StatisticCalculator:
     def __get_index__(self):
         logging.info("Loading index...")
         tables = {}
-        with open(self.index_file) as handler:
+        with open(self.index_file, encoding="utf-8") as handler:
             for line in handler:
                 table = deserialize_table(line)
                 tables[table.id] = table
@@ -335,7 +341,7 @@ class StatisticCalculator:
     def __get_players__(self):
         logging.info("Loading players...")
         players = {}
-        with open(self.player_file) as handler:
+        with open(self.player_file, encoding="utf-8") as handler:
             for line in handler:
                 player = deserialized_indexed_player(line)
                 players[player.nickname] = player
@@ -657,7 +663,14 @@ def deserialized_indexed_player(line):
 
 def sorted_data_files(data_files):
     sorted_tuples = sorted(tuple(map(parse_int, data_file.split(os.sep))) for data_file in data_files)
-    return map(lambda tup: os.path.join(*map(str, tup)), sorted_tuples)
+    if is_windows():
+        return map(lambda tup: os.path.join(str(tup[0]), os.sep, *map(str, tup[1:])), sorted_tuples)
+    else:
+        return map(lambda tup: os.path.join(*map(str, tup)), sorted_tuples)
+
+
+def is_windows():
+    return os.name == "nt"
 
 
 def is_data_file(file):
