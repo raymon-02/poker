@@ -4,6 +4,7 @@ import logging
 import os
 from collections import defaultdict, Counter, OrderedDict
 from datetime import timezone, datetime, timedelta
+from enum import Enum
 from shutil import copyfile
 from types import SimpleNamespace
 from typing import NamedTuple
@@ -20,6 +21,7 @@ EXPRESSO_NITRO = "Expresso Nitro"
 LIMIT_SUMMARY = "limit_summary"
 WNX_CM = "WNX.cm"
 DATETIME_FORMAT = "%Y/%m/%d %H:%M:%S"
+REF_FISH_FOLDER_FORMAT = "reg-{}-fish-{}"
 
 WEEKDAY = "Weekday"
 WEEKEND = "Weekend"
@@ -52,6 +54,11 @@ class XA(NamedTuple):
 NO_XA = XA("", -1)
 
 
+class XAType(Enum):
+    FISH = "fish"
+    LOST = "lost"
+
+
 class IndexedPlayer(NamedTuple):
     nickname: str
     tables: int
@@ -64,12 +71,14 @@ class Table(NamedTuple):
     table_data: TableData
     players: list[Player]
     xa: XA
+    lost_after_hand: int
 
 
 class TableStat(NamedTuple):
     file_meta: TableFileMeta
     is_x2: bool
     xa_after_hand: int
+    lost_after_hand: int
 
 
 class Report(NamedTuple):
@@ -198,12 +207,13 @@ class IndexCreator:
         for i, file_to_index in enumerate(files_to_index):
             if i % mod == 0:
                 logging.info("Getting table from {}/{} files...".format(i, len(files_to_index)))
-            table_data = IndexCreator.__get_table_data__(file_to_index.tsdata_file)
+            table_data, won = IndexCreator.__get_table_data__(file_to_index.tsdata_file)
             if not table_data:
                 logging.warning("Cannot get table data from TS file. Skipping: {}".format(file_to_index.tsdata_file))
                 continue
-            players, xa = self.__get_players__(file_to_index.data_files)
-            tables.append(Table(file_to_index.id, table_data, players, xa))
+            players, xa, hand_count = self.__get_data__(file_to_index.data_files)
+            lost_after_hand = 0 if won else hand_count
+            tables.append(Table(file_to_index.id, table_data, players, xa, lost_after_hand))
 
         logging.info("Got {} tables from files".format(len(tables)))
 
@@ -240,7 +250,7 @@ class IndexCreator:
     def __get_table_data__(tsdata_file):
         with open(tsdata_file, encoding="utf-8") as handler:
             lines = handler.readlines()
-        buy_in, prize_pool, timestamp = None, None, None
+        buy_in, prize_pool, timestamp, won = None, None, None, False
         for line in lines:
             if line.startswith("Buy-In"):
                 buy_in = parse_buy_in(line)
@@ -248,13 +258,15 @@ class IndexCreator:
                 prize_pool = parse_prize_pool(line)
             elif line.startswith("Tournament started"):
                 timestamp = parse_tournament_started(line)
+            elif line.startswith("You won"):
+                won = True
 
         if buy_in is None or prize_pool is None or timestamp is None:
-            return None
+            return None, won
 
-        return TableData(timestamp, prize_pool, buy_in)
+        return TableData(timestamp, prize_pool, buy_in), won
 
-    def __get_players__(self, data_files):
+    def __get_data__(self, data_files):
         xa = None
         counter = Counter()
         lines = []
@@ -276,9 +288,9 @@ class IndexCreator:
                     counter[nickname] += 1
                 xa_nicknames.add(nickname)
                 i += 1
-            xa_diff = xa_nicknames.difference(self.self_nicknames)
-            if xa is None and len(xa_nicknames) == 2 and len(xa_diff) == 1:
-                nickname = next(iter(xa_diff))
+            xa_inter = xa_nicknames.intersection(self.self_nicknames)
+            if xa is None and len(xa_inter) == 1 and len(xa_nicknames) == 2:
+                nickname = next(iter(xa_nicknames.difference(xa_inter)))
                 xa = XA(nickname, hand_count)
             while i < len(lines) and bool(lines[i].strip()):
                 i += 1
@@ -286,7 +298,7 @@ class IndexCreator:
 
         players = [Player(nickname, count) for nickname, count in counter.items()]
 
-        return players, xa if xa else NO_XA
+        return players, xa if xa else NO_XA, hand_count
 
     def __write_index__(self, new_last_table_id, tables, new_indexed_players):
         logging.info("Adding {} tables into index file...".format(len(tables)))
@@ -428,7 +440,7 @@ class StatisticCalculator:
                 -1 if self.__is_reg__(table.xa.nickname, calcmode, regtables, reghands) else table.xa.after_hand
             )
             table_stats[key].append(
-                TableStat(file_to_calc, is_prize_pool_x2(table), xa_after_hand)
+                TableStat(file_to_calc, is_prize_pool_x2(table), xa_after_hand, table.lost_after_hand)
             )
             if is_report:
                 StatisticCalculator.__add_to_report__(report, table, key)
@@ -563,7 +575,7 @@ class StatisticCalculator:
         logging.info("Copying data files...")
         for (reg, fish), table_stat_buket in table_stats.items():
             logging.info("Copying data files: reg={}, fish={}...".format(reg, fish))
-            folder_name = "reg-{}-fish-{}".format(reg, fish)
+            folder_name = REF_FISH_FOLDER_FORMAT.format(reg, fish)
             path_data_x2 = os.path.join(path_result_run, folder_name, "x2", "data")
             path_tsdata_x2 = os.path.join(path_result_run, folder_name, "x2", "tsdata")
             path_data_rest = os.path.join(path_result_run, folder_name, "rest", "data")
@@ -591,51 +603,63 @@ class StatisticCalculator:
     @staticmethod
     def __copy_xa_data_files__(table_stats, path_result_run):
         logging.info("Copying data files for XA...")
-        xa_filter_out_count = 0
+        xa_fish_filter_out_count, xa_lost_filter_out_count = 0, 0
         for (reg, fish), table_stat_buket in table_stats.items():
             logging.info("Copying data files for XA: reg={}, fish={}...".format(reg, fish))
-            folder_name = "reg-{}-fish-{}".format(reg, fish)
-
+            folder_name = REF_FISH_FOLDER_FORMAT.format(reg, fish)
             xa_folder_name = os.path.join(path_result_run, folder_name, "xa")
+
             table_stats_with_xa = list(filter(xa_filter, table_stat_buket))
-            xa_filter_out_count += len(table_stat_buket) - len(table_stats_with_xa)
-            mod = statistic_mod(len(table_stats_with_xa))
-            for i, table_stat in enumerate(table_stats_with_xa):
-                path_data = os.path.join(xa_folder_name, str(table_stat.xa_after_hand), "data")
-                path_tsdata = os.path.join(xa_folder_name, str(table_stat.xa_after_hand), "tsdata")
-                os.makedirs(path_data, exist_ok=True)
-                os.makedirs(path_tsdata, exist_ok=True)
-                if i % mod == 0:
-                    logging.info("Copying data files for XA {}/{}...".format(i, len(table_stats_with_xa)))
-                copy_tsdata_file = os.path.join(path_tsdata, table_stat.file_meta.tsdata_file.split(os.sep)[-1])
-                copyfile(table_stat.file_meta.tsdata_file, copy_tsdata_file)
-                for data_file in table_stat.file_meta.data_files:
-                    copy_data_file = os.path.join(path_data, data_file.split(os.sep)[-1])
-                    copyfile(data_file, copy_data_file)
+            xa_fish_filter_out_count += len(table_stat_buket) - len(table_stats_with_xa)
+            StatisticCalculator.__copy_xa_type_data_files__(table_stats_with_xa, xa_folder_name, XAType.FISH)
+
+            table_stats_with_lost = list(filter(xa_lost_filter, table_stat_buket))
+            xa_lost_filter_out_count += len(table_stat_buket) - len(table_stats_with_lost)
+            StatisticCalculator.__copy_xa_type_data_files__(table_stats_with_lost, xa_folder_name, XAType.LOST)
 
             logging.info("Copied data files for XA: reg={}, fish={}".format(reg, fish))
 
-        logging.info("File entries for XA were filtered out: {}".format(xa_filter_out_count))
+        logging.info("File entries for XA fish were filtered out: {}".format(xa_fish_filter_out_count))
+        logging.info("File entries for XA lost were filtered out: {}".format(xa_lost_filter_out_count))
         logging.info("Copied data files for XA")
+
+    @staticmethod
+    def __copy_xa_type_data_files__(table_stat_buket, xa_folder_name, xa_type):
+        folder_name = os.path.join(xa_folder_name, xa_type.value)
+        mod = statistic_mod(len(table_stat_buket))
+        for i, table_stat in enumerate(table_stat_buket):
+            folder_bucket_name = get_folder_bucket_name(table_stat, xa_type)
+            path_data = os.path.join(folder_name, folder_bucket_name, "data")
+            path_tsdata = os.path.join(folder_name, folder_bucket_name, "tsdata")
+            os.makedirs(path_data, exist_ok=True)
+            os.makedirs(path_tsdata, exist_ok=True)
+            if i % mod == 0:
+                logging.info("Copying data files for XA '{}' {}/{}...".format(xa_type.value, i, len(table_stat_buket)))
+            copy_tsdata_file = os.path.join(path_tsdata, table_stat.file_meta.tsdata_file.split(os.sep)[-1])
+            copyfile(table_stat.file_meta.tsdata_file, copy_tsdata_file)
+            for data_file in table_stat.file_meta.data_files:
+                copy_data_file = os.path.join(path_data, data_file.split(os.sep)[-1])
+                copyfile(data_file, copy_data_file)
 
 
 def serialize_table(table):
     players = []
     for i, player in enumerate(table.players):
         players.append("{}:{}".format(player.nickname, player.hands))
-    return "{}|{}|{}|{}|{}|{}:{}".format(
+    return "{}|{}|{}|{}|{}|{}:{}|{}".format(
         table.id,
         table.table_data.timestamp,
         table.table_data.prize_pool,
         table.table_data.buy_in,
         ",".join(players),
         table.xa.nickname,
-        table.xa.after_hand
+        table.xa.after_hand,
+        table.lost_after_hand
     )
 
 
 def deserialize_table(line):
-    table_id, timestamp, prize_pool, buy_in, players_str, xa_str = line.split("|")
+    table_id, timestamp, prize_pool, buy_in, players_str, xa_str, lost_after_hand = line.split("|")
     table_data = TableData(timestamp, float(prize_pool), float(buy_in))
     players = []
     for player in players_str.split(","):
@@ -644,7 +668,7 @@ def deserialize_table(line):
     xa_nickname, xa_after_hands = xa_str.split(":")
     xa = XA(xa_nickname.strip(), int(xa_after_hands.strip()))
 
-    return Table(int(table_id), table_data, players, xa)
+    return Table(int(table_id), table_data, players, xa, int(lost_after_hand))
 
 
 def serialize_indexed_player(index_player):
@@ -667,6 +691,10 @@ def sorted_data_files(data_files):
         return map(lambda tup: os.path.join(str(tup[0]), os.sep, *map(str, tup[1:])), sorted_tuples)
     else:
         return map(lambda tup: os.path.join(*map(str, tup)), sorted_tuples)
+
+
+def get_folder_bucket_name(table_stat, xa_type):
+    return str(table_stat.xa_after_hand if xa_type == XAType.FISH else table_stat.lost_after_hand)
 
 
 def is_windows():
@@ -719,7 +747,11 @@ def buyin_filter(buyin):
 
 
 def xa_filter(table_stat):
-    return table_stat.xa_after_hand > 0
+    return table_stat.xa_after_hand >= 0
+
+
+def xa_lost_filter(table_stat):
+    return table_stat.lost_after_hand > 0
 
 
 def is_prize_pool_x2(table):
