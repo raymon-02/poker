@@ -85,6 +85,9 @@ class Report(NamedTuple):
     days: OrderedDict[str, Counter[tuple[int, int]]]
     hours: OrderedDict[int, Counter[tuple[int, int]]]
     threes: OrderedDict[int, Counter[tuple[int, int]]]
+    day_hours: OrderedDict[tuple[str, int], Counter[tuple[int, int]]]
+    day_threes: OrderedDict[tuple[str, int], Counter[tuple[int, int]]]
+    weeks: OrderedDict[int, Counter[tuple[int, int]]]
 
 
 class IndexCreator:
@@ -468,8 +471,14 @@ class StatisticCalculator:
     @staticmethod
     def __generate_report_keys__():
         days = OrderedDict()
+        day_hours = OrderedDict()
+        day_threes = OrderedDict()
         for day_name in DAY_NAMES:
             days[day_name] = Counter()
+            for hour in range(24):
+                day_hours[(day_name, hour)] = Counter()
+            for hour in range(0, 24, 3):
+                day_threes[(day_name, hour)] = Counter()
 
         hours = OrderedDict()
         for hour in range(24):
@@ -479,7 +488,11 @@ class StatisticCalculator:
         for hour in range(0, 24, 3):
             threes[hour] = Counter()
 
-        return Report(days, hours, threes)
+        weeks = OrderedDict()
+        for week in range(1, 5):
+            weeks[week] = Counter()
+
+        return Report(days, hours, threes, day_hours, day_threes, weeks)
 
     @staticmethod
     def __add_to_report__(report, table, key):
@@ -487,13 +500,25 @@ class StatisticCalculator:
         local_tz = datetime.now().astimezone().tzinfo
         table_timestamp = timestamp_utc.astimezone(local_tz)
         day_name = table_timestamp.strftime('%A')
+        hour = table_timestamp.hour
+        three_hour = table_timestamp.hour // 3 * 3
+        week = table_timestamp.day // 7 + int(bool(table_timestamp.day % 7))
+        week = 4 if week > 4 else week
+
         report.days[day_name][key] += 1
+        report.day_hours[(day_name, hour)][key] += 1
+        report.day_threes[(day_name, three_hour)][key] += 1
         if day_name in WEEKENDS:
             report.days[WEEKEND][key] += 1
+            report.day_hours[(WEEKEND, hour)][key] += 1
+            report.day_threes[(WEEKEND, three_hour)][key] += 1
         else:
             report.days[WEEKDAY][key] += 1
-        report.hours[table_timestamp.hour][key] += 1
-        report.threes[table_timestamp.hour // 3 * 3][key] += 1
+            report.day_hours[(WEEKDAY, hour)][key] += 1
+            report.day_threes[(WEEKDAY, three_hour)][key] += 1
+        report.hours[hour][key] += 1
+        report.threes[three_hour][key] += 1
+        report.weeks[week][key] += 1
 
     def __get_stat_lines_header__(self, calcmode, regtables, reghands, interval, buyin):
         header_lines = []
@@ -535,6 +560,23 @@ class StatisticCalculator:
         for hour, counter in report.threes.items():
             hour_range = "{}-{}".format(hour, hour + 3)
             StatisticCalculator.__get_stat_counter_lines__(counter, hour_range, keys, stat_lines)
+
+        stat_lines.append("")
+        stat_lines.append("BY DAYS/HOURS")
+        for (day_name, hour), counter in report.day_hours.items():
+            day_hour_range = "{} {}-{}".format(day_name, hour, hour + 1)
+            StatisticCalculator.__get_stat_counter_lines__(counter, day_hour_range, keys, stat_lines)
+
+        stat_lines.append("")
+        stat_lines.append("BY DAYS/THREE HOURS")
+        for (day_name, hour), counter in report.day_threes.items():
+            day_hour_range = "{} {}-{}".format(day_name, hour, hour + 3)
+            StatisticCalculator.__get_stat_counter_lines__(counter, day_hour_range, keys, stat_lines)
+
+        stat_lines.append("")
+        stat_lines.append("BY WEEKS")
+        for week, counter in report.weeks.items():
+            StatisticCalculator.__get_stat_counter_lines__(counter, str(week), keys, stat_lines)
 
         return stat_lines
 
