@@ -588,7 +588,7 @@ class StatisticCalculator:
             count = map_f(counter[key])
             reg, fish = key
             per = count / total * 100 if total > 0 else 0
-            lines.append("Reg: {}, Fish {}, count: {:7}, rate: {:0.3f}%".format(reg, fish, count, per))
+            lines.append("Reg: {}, Fish: {}, count: {:7}, rate: {:0.3f}%".format(reg, fish, count, per))
         lines.append("")
 
     def __generate_result_run_folder__(self):
