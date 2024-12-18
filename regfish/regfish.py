@@ -12,7 +12,6 @@ from typing import NamedTuple
 FORMAT = "%(asctime)-15s [%(levelname)8s] %(message)s"
 logging.basicConfig(format=FORMAT, level=logging.INFO)
 
-ID_FILE_NAME = "id.txt"
 INDEX_FILE_NAME = "index.txt"
 PLAYER_FILE_NAME = "players.txt"
 STAT_FILE_NAME = "stats.txt"
@@ -27,6 +26,17 @@ WEEKDAY = "Weekday"
 WEEKEND = "Weekend"
 DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", WEEKDAY, "Saturday", "Sunday", WEEKEND]
 WEEKENDS = {"Saturday", "Sunday"}
+
+
+class Mode(Enum):
+    INDEX = "index"
+    FULL = "full"
+    FAST = "fast"
+
+
+class CalcMode(Enum):
+    TABLES = "tables"
+    HANDS = "hands"
 
 
 class TableFileMeta(NamedTuple):
@@ -63,7 +73,11 @@ class IndexedPlayer(NamedTuple):
     nickname: str
     tables: int
     hands: int
-    color_status: str
+
+
+class PlayerType(Enum):
+    REG = "Reg"
+    FISH = "Fish"
 
 
 class Table(NamedTuple):
@@ -92,56 +106,23 @@ class Report(NamedTuple):
 
 class IndexCreator:
 
-    def __init__(self, data, tsdata, colormarkers, result, nicknames):
+    def __init__(self, data, tsdata, result, nicknames):
         self.path_data = data
         self.path_tsdata = tsdata
-        self.path_colormarkers = colormarkers
         self.path_result = result
         self.self_nicknames = nicknames
-        self.id_file = os.path.join(result, ID_FILE_NAME)
         self.index_file = os.path.join(result, INDEX_FILE_NAME)
         self.player_file = os.path.join(result, PLAYER_FILE_NAME)
-        self.__index_files_init__()
 
-    def __index_files_init__(self):
-        if os.path.exists(self.id_file) and os.path.exists(self.index_file):
-            return
-        with open(self.id_file, "w", encoding="utf-8") as handler:
-            handler.write("0")
-        with open(self.index_file, "w", encoding="utf-8") as handler:
-            handler.write("")
-        with open(self.player_file, "w", encoding="utf-8") as handler:
-            handler.write("")
+    def index(self):
+        logging.info("Run indexing")
+        files_to_index = self.__get_files_to_index__()
+        tables = self.__get_tables__(files_to_index)
+        indexed_players = IndexCreator.__get_indexed_players__(tables)
+        self.__write_index__(tables, indexed_players)
+        logging.info("Finish indexing")
 
-    def modify_index(self, recalc):
-        logging.info("Run index modification")
-        if not recalc:
-            logging.info("Recalculation of index on each run is turned off. Skipping index modification")
-            return
-
-        last_table_id = self.__get_last_table_id__()
-        files_to_index = self.__get_files_to_index__(last_table_id)
-        colored_players = self.__get_colored_players__()
-        indexed_players = self.__get_indexed_players__()
-
-        new_last_table_id = last_table_id
-        tables = []
-        if files_to_index:
-            new_last_table_id = max(map(lambda fmd: fmd.id, files_to_index))
-            tables = self.__get_tables__(files_to_index)
-        logging.info("New last table id: {}".format(new_last_table_id))
-        new_indexed_players = IndexCreator.__get_new_indexed_players__(colored_players, indexed_players, tables)
-        self.__write_index__(new_last_table_id, tables, new_indexed_players)
-
-        logging.info("Finish index modification")
-
-    def __get_last_table_id__(self):
-        with open(self.id_file, encoding="utf-8") as handler:
-            last_table_id = int(handler.readline().strip())
-        logging.info("Last table id: {}".format(last_table_id))
-        return last_table_id
-
-    def __get_files_to_index__(self, last_table_id):
+    def __get_files_to_index__(self):
         logging.info("Start getting files to index")
         data_file_idx = defaultdict(set)
         tsdata_file_idx = {}
@@ -149,18 +130,16 @@ class IndexCreator:
         for root, _, files in os.walk(self.path_data):
             for file in filter(is_data_file, files):
                 table_id = parse_table_id(file)
-                if table_id > last_table_id:
-                    data_file_idx[table_id].add(os.path.join(root, file))
-                    count += 1
+                data_file_idx[table_id].add(os.path.join(root, file))
+                count += 1
         logging.info("Data files to index: {} ".format(count))
 
         count = 0
         for root, _, files in os.walk(self.path_tsdata):
             for file in filter(is_tsdata_file, files):
                 table_id = parse_table_id(file)
-                if table_id > last_table_id:
-                    tsdata_file_idx[table_id] = os.path.join(root, file)
-                    count += 1
+                tsdata_file_idx[table_id] = os.path.join(root, file)
+                count += 1
         logging.info("TS data files to index: {} ".format(count))
 
         result = []
@@ -174,34 +153,6 @@ class IndexCreator:
         logging.info("Total file entities to index: {}".format(len(result)))
 
         return result
-
-    def __get_colored_players__(self):
-        logging.info("Start getting colored players")
-        colored_players = {}
-        for root, _, files in os.walk(self.path_colormarkers):
-            for file in filter(is_color_marker_file, files):
-                filename = os.path.join(root, file)
-                with open(filename, encoding="utf-8") as handler:
-                    text = "".join(handler.readlines())
-                    player = json.loads(text, object_hook=lambda d: SimpleNamespace(**d))
-                    colored_players[player.Player.Nickname] = "Reg" if player.ColorMarker.IsReg else "Fish"
-
-        logging.info("Got {} colored players".format(len(colored_players)))
-
-        return colored_players
-
-    def __get_indexed_players__(self):
-        logging.info("Start getting current indexed players")
-        indexed_players = {}
-        with open(self.player_file, encoding="utf-8") as handler:
-            lines = handler.readlines()
-        for line in lines:
-            indexed_player = deserialized_indexed_player(line)
-            indexed_players[indexed_player.nickname] = indexed_player
-
-        logging.info("Got {} current indexed players".format(len(indexed_players)))
-
-        return indexed_players
 
     def __get_tables__(self, files_to_index):
         logging.info("Start getting tables from {} files".format(len(files_to_index)))
@@ -223,31 +174,22 @@ class IndexCreator:
         return tables
 
     @staticmethod
-    def __get_new_indexed_players__(colored_players, indexed_players, tables):
-        logging.info("Start calculating indexed players")
-        new_indexed_players = {}
-
+    def __get_indexed_players__(tables):
+        logging.info("Start getting indexed players")
+        indexed_players = {}
         player_tables = Counter()
         player_hands = Counter()
-        for nickname, index_player in indexed_players.items():
-            player_tables[nickname] += index_player.tables
-            player_hands[nickname] += index_player.hands
         for table in tables:
             for player in table.players:
                 player_tables[player.nickname] += 1
                 player_hands[player.nickname] += player.hands
-
-        for nickname, color_status in colored_players.items():
-            indexed_player = IndexedPlayer(nickname, player_tables[nickname], player_hands[nickname], color_status)
-            new_indexed_players[nickname] = indexed_player
         for nickname, table_count in player_tables.items():
-            if nickname not in new_indexed_players:
-                indexed_player = IndexedPlayer(nickname, table_count, player_hands[nickname], "None")
-                new_indexed_players[nickname] = indexed_player
+            indexed_player = IndexedPlayer(nickname, table_count, player_hands[nickname])
+            indexed_players[nickname] = indexed_player
 
-        logging.info("Calculated {} indexed players".format(len(new_indexed_players)))
+        logging.info("Got {} indexed players".format(len(indexed_players)))
 
-        return list(new_indexed_players.values())
+        return list(indexed_players.values())
 
     @staticmethod
     def __get_table_data__(tsdata_file):
@@ -303,37 +245,34 @@ class IndexCreator:
 
         return players, xa if xa else NO_XA, hand_count
 
-    def __write_index__(self, new_last_table_id, tables, new_indexed_players):
-        logging.info("Adding {} tables into index file...".format(len(tables)))
+    def __write_index__(self, tables, indexed_players):
+        logging.info("Saving {} tables into index file...".format(len(tables)))
         serialized_tables = map(serialize_table, tables)
         mod = statistic_mod(len(tables))
-        with open(self.index_file, "a+", encoding="utf-8") as handler:
+        with open(self.index_file, "w", encoding="utf-8") as handler:
             for i, serialized_table in enumerate(serialized_tables):
                 if i % mod == 0:
                     logging.info("Adding {}/{} table into index file...".format(i, len(tables)))
                 handler.write(serialized_table)
                 handler.write("\n")
-        logging.info("Added tables into index file")
+        logging.info("Saved tables into index file")
 
-        logging.info("Saving {} indexed players...".format(len(new_indexed_players)))
+        logging.info("Saving {} indexed players into players file...".format(len(indexed_players)))
         with open(self.player_file, "w", encoding="utf-8") as handler:
-            for indexed_player in new_indexed_players:
+            for indexed_player in indexed_players:
                 handler.write(serialize_indexed_player(indexed_player))
                 handler.write("\n")
-        logging.info("Saved indexed players")
-
-        logging.info("Saving new last table id: {}...".format(new_last_table_id))
-        with open(self.id_file, "w", encoding="utf-8") as handler:
-            handler.write(str(new_last_table_id))
-        logging.info("Saved new last table id")
+        logging.info("Saved indexed players into players file")
 
 
 class StatisticCalculator:
 
-    def __init__(self, calcdata, calctsdata, result, current_interval):
+    def __init__(self, calcdata, calctsdata, colormarkers, result, original_interval, current_interval):
         self.path_calc_data = calcdata
         self.path_calc_tsdata = calctsdata
+        self.path_colormarkers = colormarkers
         self.path_result = result
+        self.original_interval = original_interval
         self.current_interval = current_interval
         self.index_file = os.path.join(result, INDEX_FILE_NAME)
         self.player_file = os.path.join(result, PLAYER_FILE_NAME)
@@ -399,7 +338,11 @@ class StatisticCalculator:
 
     def calculate(self, calcmode, regtables, reghands, interval, buyin, is_report, is_sort, is_xa):
         logging.info("Run stat calculation")
-        table_stats, report = self.__get_stats__(calcmode, regtables, reghands, interval, buyin, is_report)
+        colored_players = self.__get_colored_players__()
+
+        table_stats, report = self.__get_stats__(
+            calcmode, colored_players, regtables, reghands, interval, buyin, is_report
+        )
         header_lines = self.__get_stat_lines_header__(calcmode, regtables, reghands, interval, buyin)
         stat_lines = StatisticCalculator.__get_stat_lines__(table_stats, report, is_report)
         path_result_run = self.__generate_result_run_folder__()
@@ -412,7 +355,23 @@ class StatisticCalculator:
 
         return stat_lines
 
-    def __get_stats__(self, calcmode, regtables, reghands, interval, buyin, is_report):
+    def __get_colored_players__(self):
+        logging.info("Start getting colored players")
+        colored_players = {}
+        for root, _, files in os.walk(self.path_colormarkers):
+            for file in filter(is_color_marker_file, files):
+                filename = os.path.join(root, file)
+                with open(filename, encoding="utf-8") as handler:
+                    text = "".join(handler.readlines())
+                    player = json.loads(text, object_hook=lambda d: SimpleNamespace(**d))
+                    player_type = PlayerType.REG if player.ColorMarker.IsReg else PlayerType.FISH
+                    colored_players[player.Player.Nickname] = player_type
+
+        logging.info("Got {} colored players".format(len(colored_players)))
+
+        return colored_players
+
+    def __get_stats__(self, calcmode, colored_players, regtables, reghands, interval, buyin, is_report):
         logging.info("Start getting table stats")
 
         table_stats = defaultdict(list)
@@ -420,6 +379,7 @@ class StatisticCalculator:
         filter_out_count = 0
         not_found_count = 0
         filters = [interval_filter(interval)] + ([] if buyin is None else [buyin_filter(buyin)])
+        regs = set()
         report = StatisticCalculator.__generate_report_keys__()
 
         for file_to_calc in self.files_to_calculate:
@@ -434,14 +394,15 @@ class StatisticCalculator:
             reg = 0
             fish = 0
             for nickname in map(lambda player: player.nickname, table.players):
-                if self.__is_reg__(nickname, calcmode, regtables, reghands):
+                if nickname in regs:
+                    reg += 1
+                elif self.__is_reg__(nickname, colored_players, calcmode, regtables, reghands):
+                    regs.add(nickname)
                     reg += 1
                 else:
                     fish += 1
             key = (reg, fish)
-            xa_after_hand = (
-                -1 if self.__is_reg__(table.xa.nickname, calcmode, regtables, reghands) else table.xa.after_hand
-            )
+            xa_after_hand = -1 if table.xa.nickname in regs else table.xa.after_hand
             table_stats[key].append(
                 TableStat(file_to_calc, is_prize_pool_x2(table), xa_after_hand, table.lost_after_hand)
             )
@@ -457,13 +418,14 @@ class StatisticCalculator:
 
         return table_stats, report
 
-    def __is_reg__(self, nickname, calcmode, regtables, reghands):
+    def __is_reg__(self, nickname, colored_players, calcmode, regtables, reghands):
+        color_status = colored_players.get(nickname, None)
+        if color_status is not None:
+            return color_status == PlayerType.REG
         player = self.players.get(nickname, None)
-        if player is None or player.color_status == "Fish":
+        if player is None:
             return False
-        if player.color_status == "Reg":
-            return True
-        if calcmode == "tables":
+        if calcmode == CalcMode.TABLES:
             return player.tables >= regtables
         else:
             return player.hands >= reghands
@@ -524,9 +486,10 @@ class StatisticCalculator:
         header_lines = []
         current_time = datetime.now().strftime(DATETIME_FORMAT)
         header_lines.append("Run time:             {}".format(current_time))
-        header_lines.append("Reg calculation mode: {}".format(calcmode))
+        header_lines.append("Reg calculation mode: {}".format(calcmode.name))
         header_lines.append("Reg table value:      {}".format(regtables))
         header_lines.append("Reg hand value:       {}".format(reghands))
+        header_lines.append("In original interval: {}".format(self.original_interval))
         header_lines.append("In interval:          {}".format(self.current_interval))
         header_lines.append("In interval UTC:      {}".format(interval))
         header_lines.append("Buy-in:               {}".format(buyin if buyin else "all"))
@@ -714,17 +677,16 @@ def deserialize_table(line):
 
 
 def serialize_indexed_player(index_player):
-    return "{}|{}|{}|{}".format(
+    return "{}|{}|{}".format(
         index_player.nickname,
         index_player.tables,
-        index_player.hands,
-        index_player.color_status
+        index_player.hands
     )
 
 
 def deserialized_indexed_player(line):
-    nickname, tables, hands, color_status = line.split("|")
-    return IndexedPlayer(nickname.strip(), int(tables), int(hands), color_status.strip())
+    nickname, tables, hands = line.split("|")
+    return IndexedPlayer(nickname.strip(), int(tables), int(hands))
 
 
 def sorted_data_files(data_files):
@@ -804,6 +766,14 @@ def statistic_mod(last_number):
     return max(1, last_number // 10)
 
 
+def parse_mode(mode):
+    return Mode(mode.strip().lower())
+
+
+def parse_calcmode(mode):
+    return CalcMode(mode.strip().lower())
+
+
 def parse_nicknames(names):
     return set(map(lambda name: name.strip(), names.split(",")))
 
@@ -877,14 +847,14 @@ def parse_file_args(file):
 
 def parse_args(config_file="config.txt"):
     parser = argparse.ArgumentParser(description="Retrieve hands")
-    parser.add_argument("-d", "--data", metavar="path", help="path to data folder")
-    parser.add_argument("-t", "--tsdata", metavar="path", help="path to TS data folder")
-    parser.add_argument("-c", "--colormarkers", metavar="path", help="path to color markers folder")
-    parser.add_argument("-r", "--result", metavar="path", help="path to result folder")
-    parser.add_argument("-n", "--nicknames", metavar="name[,name]", help="player nicknames")
-    parser.add_argument("--recalc", metavar="bool", help="calculate index on each run")
+    parser.add_argument("--mode", metavar="mode", help="mode of program run")
+    parser.add_argument("--result", metavar="path", help="path to result folder")
+    parser.add_argument("--nicknames", metavar="name[,name]", help="player nicknames")
+    parser.add_argument("--data", metavar="path", help="path to data folder")
+    parser.add_argument("--tsdata", metavar="path", help="path to TS data folder")
     parser.add_argument("--calcdata", metavar="path", help="path to data folder on which calculate statistic")
     parser.add_argument("--calctsdata", metavar="path", help="path to TS data folder on which calculate statistic")
+    parser.add_argument("--colormarkers", metavar="path", help="path to color markers folder")
     parser.add_argument("--calcmode", metavar="mode", help="calculation mode tables/hands")
     parser.add_argument("--regtables", metavar="int", help="table count for reg", type=int)
     parser.add_argument("--reghands", metavar="int", help="hand count for reg", type=int)
@@ -893,9 +863,18 @@ def parse_args(config_file="config.txt"):
     parser.add_argument("--report", metavar="bool", help="report statistic by days and hours")
     parser.add_argument("--sort", metavar="bool", help="sort files into folders")
     parser.add_argument("--xa", metavar="bool", help="sort files by XA")
+    parser.add_argument("--interactive", metavar="bool", help="interactive mode for FAST mode")
     args = parser.parse_args()
     config_args = parse_file_args(config_file)
 
+    if not args.mode:
+        args.mode = config_args.get("mode", "full")
+    args.mode = parse_mode(args.mode)
+    if not args.result:
+        args.result = config_args.get("result", "./")
+    if not args.nicknames:
+        args.nicknames = config_args.get("nicknames", "")
+    args.nicknames = parse_nicknames(args.nicknames)
     if not args.data:
         if "data" not in config_args:
             raise ValueError("No path specified for data folder")
@@ -906,19 +885,6 @@ def parse_args(config_file="config.txt"):
             raise ValueError("No path specified for TS data folder")
         else:
             args.tsdata = config_args["tsdata"]
-    if not args.colormarkers:
-        if "colormarkers" not in config_args:
-            raise ValueError("No path specified for color markers folder")
-        else:
-            args.colormarkers = config_args["colormarkers"]
-    if not args.result:
-        args.result = config_args.get("result", "./")
-    if not args.nicknames:
-        args.nicknames = config_args.get("nicknames", "")
-    args.nicknames = parse_nicknames(args.nicknames)
-    if not args.recalc:
-        args.recalc = config_args.get("recalc", "true")
-    args.recalc = parse_bool(args.recalc)
     if not args.calcdata:
         if "calcdata" not in config_args:
             raise ValueError("No path specified for calculation data folder")
@@ -929,15 +895,21 @@ def parse_args(config_file="config.txt"):
             raise ValueError("No path specified for calculation TS data folder")
         else:
             args.calctsdata = config_args["calctsdata"]
+    if not args.colormarkers:
+        if "colormarkers" not in config_args:
+            raise ValueError("No path specified for color markers folder")
+        else:
+            args.colormarkers = config_args["colormarkers"]
     if not args.calcmode:
         args.calcmode = config_args.get("calcmode", "tables")
+    args.calcmode = parse_calcmode(args.calcmode)
     if not args.regtables:
         args.regtables = int(config_args.get("regtables", "100"))
     if not args.reghands:
         args.reghands = int(config_args.get("reghands", "200"))
     if not args.interval:
         args.interval = config_args.get("interval", "all")
-    args.current_interval, args.interval = parse_interval(args.interval)
+    args.current_interval, args.utc_interval = parse_interval(args.interval)
     if not args.buyin:
         args.buyin = config_args.get("buyin", "all")
     args.buyin = parse_buyin(args.buyin)
@@ -950,20 +922,25 @@ def parse_args(config_file="config.txt"):
     if not args.xa:
         args.xa = config_args.get("xa", "false")
     args.xa = parse_bool(args.xa)
+    if not args.interactive:
+        args.interactive = config_args.get("interactive", "false")
+    args.interactive = parse_bool(args.interactive)
 
     return args
 
 
-def index(data, tsdata, colormarkers, result, nicknames, recalc):
-    index_creator = IndexCreator(data, tsdata, colormarkers, result, nicknames)
-    index_creator.modify_index(recalc)
+def index(data, tsdata, result, nicknames):
+    index_creator = IndexCreator(data, tsdata, result, nicknames)
+    index_creator.index()
 
 
-def calculate(
-        calcdata, calctsdata, result, calcmode, regtables, reghands,
-        current_interval, interval, buyin, is_report, is_sort, is_xa
+def calculate_full(
+        result, calcdata, calctsdata, colormarkers, calcmode, regtables, reghands,
+        original_interval, current_interval, interval, buyin, is_report, is_sort, is_xa
 ):
-    statistic_calculator = StatisticCalculator(calcdata, calctsdata, result, current_interval)
+    statistic_calculator = StatisticCalculator(
+        calcdata, calctsdata, colormarkers, result, original_interval, current_interval
+    )
     stat_lines = statistic_calculator.calculate(
         calcmode, regtables, reghands, interval, buyin, is_report, is_sort, is_xa
     )
@@ -979,40 +956,65 @@ def calculate(
 
 def main():
     args = parse_args()
-    logging.info("Data folder:                   {}".format(args.data))
-    logging.info("TS data folder:                {}".format(args.tsdata))
-    logging.info("Color Markers folder:          {}".format(args.colormarkers))
+    logging.info("Mode of run:                   {}".format(args.mode.name))
     logging.info("Result folder:                 {}".format(args.result))
     logging.info("Nicknames:                     {}".format(args.nicknames))
-    logging.info("Recalculate index on each run: {}".format(args.recalc))
+    logging.info("Data folder:                   {}".format(args.data))
+    logging.info("TS data folder:                {}".format(args.tsdata))
     logging.info("Calculation data folder:       {}".format(args.calcdata))
     logging.info("Calculation TS data folder:    {}".format(args.calctsdata))
-    logging.info("Calculation mode:              {}".format(args.calcmode))
+    logging.info("Color Markers folder:          {}".format(args.colormarkers))
+    logging.info("Calculation mode:              {}".format(args.calcmode.name))
     logging.info("Reg tables:                    {}".format(args.regtables))
     logging.info("Reg hands:                     {}".format(args.reghands))
+    logging.info("Original interval:             {}".format(args.interval))
     logging.info("Interval:                      {}".format(args.current_interval))
-    logging.info("Interval UTC:                  {}".format(args.interval))
+    logging.info("Interval UTC:                  {}".format(args.utc_interval))
     logging.info("Buy-in:                        {}".format(args.buyin))
     logging.info("Calculate report by intervals: {}".format(args.report))
     logging.info("Sort files into folders:       {}".format(args.sort))
     logging.info("Sort files by XA:              {}".format(args.xa))
+    logging.info("Interactive mode:              {}".format(args.interactive))
     logging.info("")
 
-    index(args.data, args.tsdata, args.colormarkers, args.result, args.nicknames, args.recalc)
-    calculate(
-        args.calcdata,
-        args.calctsdata,
-        args.result,
-        args.calcmode,
-        args.regtables,
-        args.reghands,
-        args.current_interval,
-        args.interval,
-        args.buyin,
-        args.report,
-        args.sort,
-        args.xa
-    )
+    if args.mode == Mode.INDEX:
+        index(args.data, args.tsdata, args.result, args.nicknames)
+    elif args.mode == Mode.FULL:
+        calculate_full(
+            args.result,
+            args.calcdata,
+            args.calctsdata,
+            args.colormarkers,
+            args.calcmode,
+            args.regtables,
+            args.reghands,
+            args.interval,
+            args.current_interval,
+            args.utc_interval,
+            args.buyin,
+            args.report,
+            args.sort,
+            args.xa
+        )
+    else:
+        pass
+        # calculate_fast(
+        #     args.result,
+        #     args.calcdata,
+        #     args.calctsdata,
+        #     args.colormarkers
+        #     args.calcmode,
+        #     args.regtables,
+        #     args.reghands,
+        #     args.interval,
+        #     args.current_interval,
+        #     args.utc_interval,
+        #     args.buyin,
+        #     args.report,
+        #     args.sort,
+        #     args.xa,
+        #     args.interactive
+        # )
 
     return 0
 
