@@ -1,4 +1,4 @@
-mode=full
+mode=index
 result=result
 nicknames=MagXedin,noSki1ls
 
@@ -14,6 +14,6 @@ reghands=300
 interval=20230701-20250731
 buyin=all
 
-report=true
 sort=false
 xa=false
+interactive=false
