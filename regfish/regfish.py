@@ -979,7 +979,7 @@ def parse_file_args(file):
 
 
 def parse_args(config_file="config.txt"):
-    parser = argparse.ArgumentParser(description="Retrieve hands")
+    parser = argparse.ArgumentParser(description="Reg and fish statistic")
     parser.add_argument("--mode", metavar="mode", help="mode of program run")
     parser.add_argument("--result", metavar="path", help="path to result folder")
     parser.add_argument("--nicknames", metavar="name[,name]", help="player nicknames")
