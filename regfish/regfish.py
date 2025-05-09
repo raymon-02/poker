@@ -311,7 +311,7 @@ class AbstractStatisticCalculator(abc.ABC):
         return players
 
     @abc.abstractmethod
-    def __get_calc_files__(self):
+    def __get_calc_files__(self, interval):
         pass
 
     def __get_colored_players__(self):
@@ -445,7 +445,7 @@ class FullStatisticCalculator(AbstractStatisticCalculator):
 
         return stat_lines
 
-    def __get_calc_files__(self):
+    def __get_calc_files__(self, interval):
         logging.info("Start getting files to calculate stat")
         data_file_idx = defaultdict(set)
         tsdata_file_idx = {}
@@ -676,7 +676,7 @@ class FastStatisticCalculator(AbstractStatisticCalculator):
 
     def calculate(self, calcmode, regtables, reghands, interval, buyin):
         logging.info("Run FAST stat calculation")
-        files_to_calculate = self.__get_calc_files__()
+        files_to_calculate = self.__get_calc_files__(interval)
         colored_players = self.__get_colored_players__()
         table_stats = self.__get_stats__(
             files_to_calculate, calcmode, colored_players, regtables, reghands, interval, buyin
@@ -687,11 +687,15 @@ class FastStatisticCalculator(AbstractStatisticCalculator):
 
         return header_lines, stat_lines
 
-    def __get_calc_files__(self):
+    def __get_calc_files__(self, interval):
         logging.info("Start getting files to calculate stat")
         data_file_idx = defaultdict(set)
         count = 0
+
+        file_root_filter = interval_file_filter(interval)
         for root, _, files in os.walk(self.path_calc_data):
+            if not file_root_filter(root):
+                continue
             for file in filter(is_data_file, files):
                 table_id = parse_table_id(file)
                 data_file_idx[table_id].add(os.path.join(root, file))
@@ -877,6 +881,17 @@ def parse_nickname(line):
 
 def interval_filter(interval):
     return lambda table: interval[0] <= table.table_data.timestamp <= interval[1]
+
+
+def interval_file_filter(interval):
+    def internal(root_path):
+        paths = root_path.split(os.sep)
+        if len(paths) < 3:
+            return False
+        file_date = "{}/{}/{}".format(paths[-3], paths[-2].zfill(2), paths[-1].zfill(2))
+        return interval[0].split()[0] <= file_date <= interval[1].split()[0]
+
+    return internal
 
 
 def buyin_filter(buyin):
