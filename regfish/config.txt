@@ -13,6 +13,7 @@ regtables=100
 reghands=300
 interval=20230701-20250731
 buyin=all
+last=50
 
 sort=false
 xa=false

@@ -310,10 +310,6 @@ class AbstractStatisticCalculator(abc.ABC):
 
         return players
 
-    @abc.abstractmethod
-    def __get_calc_files__(self, interval):
-        pass
-
     def __get_colored_players__(self):
         logging.info("Start getting colored players")
         colored_players = {}
@@ -330,9 +326,6 @@ class AbstractStatisticCalculator(abc.ABC):
 
         return colored_players
 
-    @abc.abstractmethod
-    def __get_stats__(self, files_to_calculate, calcmode, colored_players, regtables, reghands, interval, buyin):
-        pass
 
     def __is_reg__(self, nickname, colored_players, calcmode, regtables, reghands):
         color_status = colored_players.get(nickname, None)
@@ -363,12 +356,17 @@ class AbstractStatisticCalculator(abc.ABC):
         return header_lines
 
     @staticmethod
-    def __get_stat_lines__(table_stats, report=None, map_f=lambda el: el):
+    def __get_stat_lines__(table_stats, last_table_stats=None, report=None, map_f=lambda el: el):
         stat_lines = []
         keys = sorted(table_stats.keys())
         AbstractStatisticCalculator.__get_stat_counter_lines__(
             table_stats, "tables", keys, stat_lines, map_f=map_f
         )
+
+        if last_table_stats:
+            AbstractStatisticCalculator.__get_stat_counter_lines__(
+                last_table_stats, "last tables", keys, stat_lines
+            )
 
         if not report:
             return stat_lines
@@ -434,7 +432,7 @@ class FullStatisticCalculator(AbstractStatisticCalculator):
             files_to_calculate, calcmode, colored_players, regtables, reghands, interval, buyin
         )
         header_lines = self.__get_stat_lines_header__(calcmode, regtables, reghands, interval, buyin)
-        stat_lines = FullStatisticCalculator.__get_stat_lines__(table_stats, report, map_f=len)
+        stat_lines = AbstractStatisticCalculator.__get_stat_lines__(table_stats, report=report, map_f=len)
         path_result_run = self.__generate_result_run_folder__()
         FullStatisticCalculator.__write_stats__(header_lines, stat_lines, path_result_run)
         if is_sort:
@@ -445,7 +443,7 @@ class FullStatisticCalculator(AbstractStatisticCalculator):
 
         return stat_lines
 
-    def __get_calc_files__(self, interval):
+    def __get_calc_files__(self):
         logging.info("Start getting files to calculate stat")
         data_file_idx = defaultdict(set)
         tsdata_file_idx = {}
@@ -674,15 +672,15 @@ class FastStatisticCalculator(AbstractStatisticCalculator):
         super().__init__(calcdata, calctsdata, colormarkers, result, original_interval, current_interval)
         self.self_nicknames = nicknames
 
-    def calculate(self, calcmode, regtables, reghands, interval, buyin):
+    def calculate(self, calcmode, regtables, reghands, interval, buyin, last):
         logging.info("Run FAST stat calculation")
         files_to_calculate = self.__get_calc_files__(interval)
         colored_players = self.__get_colored_players__()
-        table_stats = self.__get_stats__(
-            files_to_calculate, calcmode, colored_players, regtables, reghands, interval, buyin
+        table_stats, last_table_stats = self.__get_stats__(
+            files_to_calculate, calcmode, colored_players, regtables, reghands, interval, buyin, last
         )
         header_lines = self.__get_stat_lines_header__(calcmode, regtables, reghands, interval, buyin)
-        stat_lines = AbstractStatisticCalculator.__get_stat_lines__(table_stats)
+        stat_lines = AbstractStatisticCalculator.__get_stat_lines__(table_stats, last_table_stats=last_table_stats)
         logging.info("Finish FAST stat calculation")
 
         return header_lines, stat_lines
@@ -711,15 +709,17 @@ class FastStatisticCalculator(AbstractStatisticCalculator):
 
         return result
 
-    def __get_stats__(self, files_to_calculate, calcmode, colored_players, regtables, reghands, interval, buyin):
+    def __get_stats__(self, files_to_calculate, calcmode, colored_players, regtables, reghands, interval, buyin, last):
         logging.info("Start getting table stats")
 
         table_stats = Counter()
+        last_table_stats = Counter()
         filter_count = 0
         filter_out_count = 0
         not_found_count = 0
         filters = [interval_filter(interval)] + ([] if buyin is None else [buyin_filter(buyin)])
         regs = set()
+        files_to_calculate.sort(key=lambda tfm: tfm.id, reverse=True)
 
         mod = statistic_mod(len(files_to_calculate))
         for i, file_to_calc in enumerate(files_to_calculate):
@@ -745,6 +745,8 @@ class FastStatisticCalculator(AbstractStatisticCalculator):
                     fish += 1
             key = (reg, fish)
             table_stats[key] += 1
+            if i < last:
+                last_table_stats[key] += 1
             filter_count += 1
 
         logging.info("Tables were not found in index to get data: {}".format(not_found_count))
@@ -752,7 +754,7 @@ class FastStatisticCalculator(AbstractStatisticCalculator):
         logging.info("Tables were filtered out: {}".format(filter_out_count))
         logging.info("Got {} buckets in table stats: {}".format(len(table_stats), list(table_stats.keys())))
 
-        return table_stats
+        return table_stats, last_table_stats
 
     def __get_table_from_data_file__(self, file_to_calc):
         data_file = list(sorted_data_files(file_to_calc.data_files))[0]
@@ -1008,6 +1010,7 @@ def parse_args(config_file="config.txt"):
     parser.add_argument("--reghands", metavar="int", help="hand count for reg", type=int)
     parser.add_argument("--interval", metavar="interval", help="interval e.g. 1h,2d,today,month,all,20240101-20240201")
     parser.add_argument("--buyin", metavar="value", help="buyin to filter e.g. 5,10,all")
+    parser.add_argument("--last", metavar="int", help="calculate stat for last tables additionally")
     parser.add_argument("--report", metavar="bool", help="report statistic by days and hours")
     parser.add_argument("--sort", metavar="bool", help="sort files into folders")
     parser.add_argument("--xa", metavar="bool", help="sort files by XA")
@@ -1061,6 +1064,9 @@ def parse_args(config_file="config.txt"):
     if not args.buyin:
         args.buyin = config_args.get("buyin", "all")
     args.buyin = parse_buyin(args.buyin)
+    if not args.last:
+        args.last = config_args.get("last", "50")
+    args.last = int(args.last)
     if not args.sort:
         args.sort = config_args.get("sort", "false")
     args.sort = parse_bool(args.sort)
@@ -1092,12 +1098,12 @@ def calculate_full(
 
 def calculate_fast(
         result, calcdata, calctsdata, colormarkers, calcmode, regtables, reghands,
-        original_interval, current_interval, interval, buyin, interactive, nicknames
+        original_interval, current_interval, interval, buyin, last, interactive, nicknames
 ):
     statistic_calculator = FastStatisticCalculator(
         calcdata, calctsdata, colormarkers, result, original_interval, current_interval, nicknames
     )
-    header_lines, stat_lines = statistic_calculator.calculate(calcmode, regtables, reghands, interval, buyin)
+    header_lines, stat_lines = statistic_calculator.calculate(calcmode, regtables, reghands, interval, buyin, last)
     print_result_lines(header_lines, stat_lines)
     while interactive:
         logging.info("")
@@ -1150,6 +1156,7 @@ def main():
     logging.info("Interval:                      {}".format(args.current_interval))
     logging.info("Interval UTC:                  {}".format(args.utc_interval))
     logging.info("Buy-in:                        {}".format(args.buyin))
+    logging.info("Last tables:                   {}".format(args.last))
     logging.info("Sort files into folders:       {}".format(args.sort))
     logging.info("Sort files by XA:              {}".format(args.xa))
     logging.info("Interactive mode:              {}".format(args.interactive))
@@ -1186,6 +1193,7 @@ def main():
             args.current_interval,
             args.utc_interval,
             args.buyin,
+            args.last,
             args.interactive,
             args.nicknames
         )
