@@ -17,6 +17,7 @@ INDEX_FILE_NAME = "index.txt"
 PLAYER_FILE_NAME = "players.txt"
 STAT_FILE_NAME = "stats.txt"
 FIRST_HAND_FILE_NAME = "firsthand-{}.txt"
+BU_FOLDS_FILE_NAME = "bufolds-{}.txt"
 
 EXPRESSO_NITRO = "Expresso Nitro"
 LIMIT_SUMMARY = "limit_summary"
@@ -29,7 +30,7 @@ WEEKEND = "Weekend"
 DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", WEEKDAY, "Saturday", "Sunday", WEEKEND]
 WEEKENDS = {"Saturday", "Sunday"}
 
-FIRST_HANDS_IN_FILE = 10000
+HANDS_IN_FILE = 10000
 
 
 class Mode(Enum):
@@ -329,7 +330,6 @@ class AbstractStatisticCalculator(abc.ABC):
 
         return colored_players
 
-
     def __is_reg__(self, nickname, colored_players, calcmode, regtables, reghands):
         color_status = colored_players.get(nickname, None)
         if color_status is not None:
@@ -427,7 +427,7 @@ class FullStatisticCalculator(AbstractStatisticCalculator):
     def __init__(self, calcdata, calctsdata, colormarkers, result, original_interval, current_interval):
         super().__init__(calcdata, calctsdata, colormarkers, result, original_interval, current_interval)
 
-    def calculate(self, calcmode, regtables, reghands, interval, buyin, is_sort, is_xa, is_first_hand):
+    def calculate(self, calcmode, regtables, reghands, interval, buyin, is_sort, is_xa, is_first_hand, is_bu_fold):
         logging.info("Run FULL stat calculation")
         files_to_calculate = self.__get_calc_files__()
         colored_players = self.__get_colored_players__()
@@ -444,6 +444,8 @@ class FullStatisticCalculator(AbstractStatisticCalculator):
             FullStatisticCalculator.__copy_xa_data_files__(table_stats, path_result_run)
         if is_first_hand:
             FullStatisticCalculator.__copy_first_hands__(table_stats, path_result_run)
+        if is_bu_fold:
+            FullStatisticCalculator.__copy_bu_folds_hands__(table_stats, path_result_run)
         logging.info("Finish FULL stat calculation")
 
         return stat_lines
@@ -683,10 +685,10 @@ class FullStatisticCalculator(AbstractStatisticCalculator):
                 data_file = list(sorted_data_files(table_stat.file_meta.data_files))[0]
                 data_files.append(data_file)
 
-        steps = len(data_files) // FIRST_HANDS_IN_FILE
+        steps = len(data_files) // HANDS_IN_FILE
         for step in range(steps + 1):
-            start = step * FIRST_HANDS_IN_FILE
-            end = min((step + 1) * FIRST_HANDS_IN_FILE, len(data_files))
+            start = step * HANDS_IN_FILE
+            end = min((step + 1) * HANDS_IN_FILE, len(data_files))
             file_name = path_data_file_name.format(step)
             logging.info("Copying first hands {}-{}...".format(start, end - 1))
             with open(file_name, "w", encoding="utf-8") as handler:
@@ -696,13 +698,69 @@ class FullStatisticCalculator(AbstractStatisticCalculator):
                     i = 0
                     while i < len(lines) and not bool(lines[i].strip()):
                         i += 1
-                    j = i
-                    while j < len(lines) and bool(lines[j].strip()):
-                        j += 1
-                    handler.writelines(lines[i:j])
+                    si = i
+                    while i < len(lines) and bool(lines[i].strip()):
+                        i += 1
+                    handler.writelines(lines[si:i])
                     handler.write("\n")
 
         logging.info("Copied {} first hands into files".format(len(data_files)))
+
+    @staticmethod
+    def __copy_bu_folds_hands__(table_stats, path_result_run):
+        logging.info("Copying bu folds hands into files...")
+        path_data = os.path.join(path_result_run, "bufolds")
+        path_data_file_name = os.path.join(path_data, BU_FOLDS_FILE_NAME)
+        os.makedirs(path_data, exist_ok=True)
+
+        data_files = []
+        for table_stat_buket in table_stats.values():
+            for i, table_stat in enumerate(table_stat_buket):
+                data_files.extend(sorted_data_files(table_stat.file_meta.data_files))
+
+        bu_folds_hands_copied = 0
+        bu_folds_hands_i = 0
+        step = 0
+        file_name = path_data_file_name.format(step)
+        handler = open(file_name, "w", encoding="utf-8")
+        mod = statistic_mod(len(data_files))
+        for j, data_file in enumerate(data_files):
+            if j % mod == 0:
+                logging.info("Looking for bu folds hands in files {}/{}...".format(j, len(data_files)))
+            with open(data_file, encoding="utf-8") as handler_read:
+                lines = handler_read.readlines()
+            i = 0
+            while i < len(lines):
+                while i < len(lines) and not bool(lines[i].strip()):
+                    i += 1
+                si = i
+                seats = 0
+                bu_folds_hand = False
+                while i < len(lines) and not lines[i].startswith("Seat"):
+                    i += 1
+                while i < len(lines) and lines[i].startswith("Seat"):
+                    i += 1
+                    seats += 1
+                while i < len(lines) and bool(lines[i].strip()):
+                    if i + 1 < len(lines) and "PRE-FLOP" in lines[i] and lines[i + 1].strip().endswith(" folds"):
+                        bu_folds_hand = True
+                        i += 1
+                    i += 1
+                if bu_folds_hand and seats >= 3:
+                    handler.writelines(lines[si:i])
+                    handler.write("\n")
+                    bu_folds_hands_copied += 1
+                    bu_folds_hands_i += 1
+                if bu_folds_hands_i == HANDS_IN_FILE:
+                    handler.flush()
+                    handler.close()
+                    bu_folds_hands_i = 0
+                    step += 1
+                    file_name = path_data_file_name.format(step)
+                    handler = open(file_name, "w", encoding="utf-8")
+        handler.flush()
+        handler.close()
+        logging.info("Copied {} bu folds hands into files".format(bu_folds_hands_copied))
 
 
 class FastStatisticCalculator(AbstractStatisticCalculator):
@@ -1054,6 +1112,7 @@ def parse_args(config_file="config.txt"):
     parser.add_argument("--sort", metavar="bool", help="sort files into folders")
     parser.add_argument("--xa", metavar="bool", help="sort files by XA")
     parser.add_argument("--firsthand", metavar="bool", help="sort first hands into files")
+    parser.add_argument("--bufolds", metavar="bool", help="sort button folds hands into files")
     parser.add_argument("--interactive", metavar="bool", help="interactive mode for FAST mode")
     args = parser.parse_args()
     config_args = parse_file_args(config_file)
@@ -1116,6 +1175,9 @@ def parse_args(config_file="config.txt"):
     if not args.firsthand:
         args.firsthand = config_args.get("firsthand", "false")
     args.firsthand = parse_bool(args.firsthand)
+    if not args.bufolds:
+        args.bufolds = config_args.get("bufolds", "false")
+    args.bufolds = parse_bool(args.bufolds)
     if not args.interactive:
         args.interactive = config_args.get("interactive", "false")
     args.interactive = parse_bool(args.interactive)
@@ -1130,12 +1192,14 @@ def index(data, tsdata, result, nicknames):
 
 def calculate_full(
         result, calcdata, calctsdata, colormarkers, calcmode, regtables, reghands,
-        original_interval, current_interval, interval, buyin, is_sort, is_xa, is_first_hand
+        original_interval, current_interval, interval, buyin, is_sort, is_xa, is_first_hand, if_bu_fold
 ):
     calculator = FullStatisticCalculator(
         calcdata, calctsdata, colormarkers, result, original_interval, current_interval
     )
-    stat_lines = calculator.calculate(calcmode, regtables, reghands, interval, buyin, is_sort, is_xa, is_first_hand)
+    stat_lines = calculator.calculate(
+        calcmode, regtables, reghands, interval, buyin, is_sort, is_xa, is_first_hand, if_bu_fold
+    )
     print_stat_lines(stat_lines)
 
 
@@ -1202,7 +1266,8 @@ def main():
     logging.info("Last tables:                   {}".format(args.last))
     logging.info("Sort files into folders:       {}".format(args.sort))
     logging.info("Sort files by XA:              {}".format(args.xa))
-    logging.info("Sort files by first hand:      {}".format(args.firsthand))
+    logging.info("Sort hands by first:           {}".format(args.firsthand))
+    logging.info("Sort hands by button folds:    {}".format(args.bufolds))
     logging.info("Interactive mode:              {}".format(args.interactive))
     logging.info("")
 
@@ -1223,7 +1288,8 @@ def main():
             args.buyin,
             args.sort,
             args.xa,
-            args.firsthand
+            args.firsthand,
+            args.bufolds
         )
     else:
         calculate_fast(
