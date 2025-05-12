@@ -16,6 +16,7 @@ logging.basicConfig(format=FORMAT, level=logging.INFO)
 INDEX_FILE_NAME = "index.txt"
 PLAYER_FILE_NAME = "players.txt"
 STAT_FILE_NAME = "stats.txt"
+FIRST_HAND_FILE_NAME = "firsthand-{}.txt"
 
 EXPRESSO_NITRO = "Expresso Nitro"
 LIMIT_SUMMARY = "limit_summary"
@@ -27,6 +28,8 @@ WEEKDAY = "Weekday"
 WEEKEND = "Weekend"
 DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", WEEKDAY, "Saturday", "Sunday", WEEKEND]
 WEEKENDS = {"Saturday", "Sunday"}
+
+FIRST_HANDS_IN_FILE = 10000
 
 
 class Mode(Enum):
@@ -424,7 +427,7 @@ class FullStatisticCalculator(AbstractStatisticCalculator):
     def __init__(self, calcdata, calctsdata, colormarkers, result, original_interval, current_interval):
         super().__init__(calcdata, calctsdata, colormarkers, result, original_interval, current_interval)
 
-    def calculate(self, calcmode, regtables, reghands, interval, buyin, is_sort, is_xa):
+    def calculate(self, calcmode, regtables, reghands, interval, buyin, is_sort, is_xa, is_first_hand):
         logging.info("Run FULL stat calculation")
         files_to_calculate = self.__get_calc_files__()
         colored_players = self.__get_colored_players__()
@@ -439,6 +442,8 @@ class FullStatisticCalculator(AbstractStatisticCalculator):
             FullStatisticCalculator.__copy_data_files__(table_stats, path_result_run)
         if is_xa:
             FullStatisticCalculator.__copy_xa_data_files__(table_stats, path_result_run)
+        if is_first_hand:
+            FullStatisticCalculator.__copy_first_hands__(table_stats, path_result_run)
         logging.info("Finish FULL stat calculation")
 
         return stat_lines
@@ -664,6 +669,40 @@ class FullStatisticCalculator(AbstractStatisticCalculator):
             for data_file in table_stat.file_meta.data_files:
                 copy_data_file = os.path.join(path_data, data_file.split(os.sep)[-1])
                 copyfile(data_file, copy_data_file)
+
+    @staticmethod
+    def __copy_first_hands__(table_stats, path_result_run):
+        logging.info("Copying first hands into files...")
+        path_data = os.path.join(path_result_run, "firsthands")
+        path_data_file_name = os.path.join(path_data, FIRST_HAND_FILE_NAME)
+        os.makedirs(path_data, exist_ok=True)
+
+        data_files = []
+        for table_stat_buket in table_stats.values():
+            for i, table_stat in enumerate(table_stat_buket):
+                data_file = list(sorted_data_files(table_stat.file_meta.data_files))[0]
+                data_files.append(data_file)
+
+        steps = len(data_files) // FIRST_HANDS_IN_FILE
+        for step in range(steps + 1):
+            start = step * FIRST_HANDS_IN_FILE
+            end = min((step + 1) * FIRST_HANDS_IN_FILE, len(data_files))
+            file_name = path_data_file_name.format(step)
+            logging.info("Copying first hands {}-{}...".format(start, end - 1))
+            with open(file_name, "w", encoding="utf-8") as handler:
+                for i in range(start, end):
+                    with open(data_files[i], encoding="utf-8") as handler_read:
+                        lines = handler_read.readlines()
+                    i = 0
+                    while i < len(lines) and not bool(lines[i].strip()):
+                        i += 1
+                    j = i
+                    while j < len(lines) and bool(lines[j].strip()):
+                        j += 1
+                    handler.writelines(lines[i:j])
+                    handler.write("\n")
+
+        logging.info("Copied {} first hands into files".format(len(data_files)))
 
 
 class FastStatisticCalculator(AbstractStatisticCalculator):
@@ -1014,6 +1053,7 @@ def parse_args(config_file="config.txt"):
     parser.add_argument("--report", metavar="bool", help="report statistic by days and hours")
     parser.add_argument("--sort", metavar="bool", help="sort files into folders")
     parser.add_argument("--xa", metavar="bool", help="sort files by XA")
+    parser.add_argument("--firsthand", metavar="bool", help="sort first hands into files")
     parser.add_argument("--interactive", metavar="bool", help="interactive mode for FAST mode")
     args = parser.parse_args()
     config_args = parse_file_args(config_file)
@@ -1073,6 +1113,9 @@ def parse_args(config_file="config.txt"):
     if not args.xa:
         args.xa = config_args.get("xa", "false")
     args.xa = parse_bool(args.xa)
+    if not args.firsthand:
+        args.firsthand = config_args.get("firsthand", "false")
+    args.firsthand = parse_bool(args.firsthand)
     if not args.interactive:
         args.interactive = config_args.get("interactive", "false")
     args.interactive = parse_bool(args.interactive)
@@ -1087,12 +1130,12 @@ def index(data, tsdata, result, nicknames):
 
 def calculate_full(
         result, calcdata, calctsdata, colormarkers, calcmode, regtables, reghands,
-        original_interval, current_interval, interval, buyin, is_sort, is_xa
+        original_interval, current_interval, interval, buyin, is_sort, is_xa, is_first_hand
 ):
     calculator = FullStatisticCalculator(
         calcdata, calctsdata, colormarkers, result, original_interval, current_interval
     )
-    stat_lines = calculator.calculate(calcmode, regtables, reghands, interval, buyin, is_sort, is_xa)
+    stat_lines = calculator.calculate(calcmode, regtables, reghands, interval, buyin, is_sort, is_xa, is_first_hand)
     print_stat_lines(stat_lines)
 
 
@@ -1159,6 +1202,7 @@ def main():
     logging.info("Last tables:                   {}".format(args.last))
     logging.info("Sort files into folders:       {}".format(args.sort))
     logging.info("Sort files by XA:              {}".format(args.xa))
+    logging.info("Sort files by first hand:      {}".format(args.firsthand))
     logging.info("Interactive mode:              {}".format(args.interactive))
     logging.info("")
 
@@ -1178,7 +1222,8 @@ def main():
             args.utc_interval,
             args.buyin,
             args.sort,
-            args.xa
+            args.xa,
+            args.firsthand
         )
     else:
         calculate_fast(

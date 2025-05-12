@@ -17,4 +17,5 @@ last=50
 
 sort=false
 xa=false
+firsthand=true
 interactive=false
