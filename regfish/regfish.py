@@ -22,6 +22,7 @@ BU_FOLDS_FILE_NAME = "bufolds-{}.txt"
 EXPRESSO_NITRO = "Expresso Nitro"
 LIMIT_SUMMARY = "limit_summary"
 WNX_CM = "WNX.cm"
+DATE_FORMAT = "%Y/%m/%d"
 DATETIME_FORMAT = "%Y/%m/%d %H:%M:%S"
 REF_FISH_FOLDER_FORMAT = "reg-{}-fish-{}"
 
@@ -360,7 +361,7 @@ class AbstractStatisticCalculator(abc.ABC):
 
     @staticmethod
     def __get_stat_lines__(table_stats, last_table_stats=None, report=None, map_f=lambda el: el):
-        stat_lines = []
+        reduced_stat_lines, stat_lines = [], []
         keys = sorted(table_stats.keys())
         AbstractStatisticCalculator.__get_stat_counter_lines__(
             table_stats, "tables", keys, stat_lines, map_f=map_f
@@ -371,8 +372,10 @@ class AbstractStatisticCalculator(abc.ABC):
                 last_table_stats, "last tables", keys, stat_lines
             )
 
+        reduced_stat_lines.extend(stat_lines)
+
         if not report:
-            return stat_lines
+            return reduced_stat_lines, stat_lines
 
         stat_lines.append("")
         stat_lines.append("BY DAYS")
@@ -408,7 +411,7 @@ class AbstractStatisticCalculator(abc.ABC):
         for week, counter in report.weeks.items():
             AbstractStatisticCalculator.__get_stat_counter_lines__(counter, str(week), keys, stat_lines)
 
-        return stat_lines
+        return reduced_stat_lines, stat_lines
 
     @staticmethod
     def __get_stat_counter_lines__(counter, total_name, keys, lines, map_f=lambda el: el):
@@ -435,7 +438,9 @@ class FullStatisticCalculator(AbstractStatisticCalculator):
             files_to_calculate, calcmode, colored_players, regtables, reghands, interval, buyin
         )
         header_lines = self.__get_stat_lines_header__(calcmode, regtables, reghands, interval, buyin)
-        stat_lines = AbstractStatisticCalculator.__get_stat_lines__(table_stats, report=report, map_f=len)
+        reduced_stat_lines, stat_lines = AbstractStatisticCalculator.__get_stat_lines__(
+            table_stats, report=report, map_f=len
+        )
         path_result_run = self.__generate_result_run_folder__()
         FullStatisticCalculator.__write_stats__(header_lines, stat_lines, path_result_run)
         if is_sort:
@@ -448,7 +453,7 @@ class FullStatisticCalculator(AbstractStatisticCalculator):
             FullStatisticCalculator.__copy_bu_folds_hands__(table_stats, path_result_run)
         logging.info("Finish FULL stat calculation")
 
-        return stat_lines
+        return reduced_stat_lines
 
     def __get_calc_files__(self):
         logging.info("Start getting files to calculate stat")
@@ -686,10 +691,11 @@ class FullStatisticCalculator(AbstractStatisticCalculator):
                 data_files.append(data_file)
 
         steps = len(data_files) // HANDS_IN_FILE
+        zfill_len = len(str(steps + 1))
         for step in range(steps + 1):
             start = step * HANDS_IN_FILE
             end = min((step + 1) * HANDS_IN_FILE, len(data_files))
-            file_name = path_data_file_name.format(step)
+            file_name = path_data_file_name.format(str(step).zfill(zfill_len))
             logging.info("Copying first hands {}-{}...".format(start, end - 1))
             with open(file_name, "w", encoding="utf-8") as handler:
                 for i in range(start, end):
@@ -721,7 +727,8 @@ class FullStatisticCalculator(AbstractStatisticCalculator):
         bu_folds_hands_copied = 0
         bu_folds_hands_i = 0
         step = 0
-        file_name = path_data_file_name.format(step)
+        zfill_len = len(str(len(data_files) // HANDS_IN_FILE * 20))
+        file_name = path_data_file_name.format(str(step).zfill(zfill_len))
         handler = open(file_name, "w", encoding="utf-8")
         mod = statistic_mod(len(data_files))
         for j, data_file in enumerate(data_files):
@@ -756,7 +763,7 @@ class FullStatisticCalculator(AbstractStatisticCalculator):
                     handler.close()
                     bu_folds_hands_i = 0
                     step += 1
-                    file_name = path_data_file_name.format(step)
+                    file_name = path_data_file_name.format(str(step).zfill(zfill_len))
                     handler = open(file_name, "w", encoding="utf-8")
         handler.flush()
         handler.close()
@@ -777,10 +784,12 @@ class FastStatisticCalculator(AbstractStatisticCalculator):
             files_to_calculate, calcmode, colored_players, regtables, reghands, interval, buyin, last
         )
         header_lines = self.__get_stat_lines_header__(calcmode, regtables, reghands, interval, buyin)
-        stat_lines = AbstractStatisticCalculator.__get_stat_lines__(table_stats, last_table_stats=last_table_stats)
+        reduced_stat_lines, stat_lines = AbstractStatisticCalculator.__get_stat_lines__(
+            table_stats, last_table_stats=last_table_stats
+        )
         logging.info("Finish FAST stat calculation")
 
-        return header_lines, stat_lines
+        return header_lines, reduced_stat_lines
 
     def __get_calc_files__(self, interval):
         logging.info("Start getting files to calculate stat")
@@ -983,12 +992,16 @@ def interval_filter(interval):
 
 
 def interval_file_filter(interval):
+    start = datetime.strptime(interval[0], DATETIME_FORMAT) - timedelta(days=2)
+    end = datetime.strptime(interval[1], DATETIME_FORMAT) + timedelta(days=2)
+    start, end = start.strftime(DATE_FORMAT), end.strftime(DATE_FORMAT)
+
     def internal(root_path):
         paths = root_path.split(os.sep)
         if len(paths) < 3:
             return False
         file_date = "{}/{}/{}".format(paths[-3], paths[-2].zfill(2), paths[-1].zfill(2))
-        return interval[0].split()[0] <= file_date <= interval[1].split()[0]
+        return start <= file_date <= end
 
     return internal
 
@@ -1108,7 +1121,6 @@ def parse_args(config_file="config.txt"):
     parser.add_argument("--interval", metavar="interval", help="interval e.g. 1h,2d,today,month,all,20240101-20240201")
     parser.add_argument("--buyin", metavar="value", help="buyin to filter e.g. 5,10,all")
     parser.add_argument("--last", metavar="int", help="calculate stat for last tables additionally")
-    parser.add_argument("--report", metavar="bool", help="report statistic by days and hours")
     parser.add_argument("--sort", metavar="bool", help="sort files into folders")
     parser.add_argument("--xa", metavar="bool", help="sort files by XA")
     parser.add_argument("--firsthand", metavar="bool", help="sort first hands into files")
@@ -1220,7 +1232,7 @@ def calculate_fast(
         if inp.strip().lower() == "exit":
             logging.info("Closing program...")
             break
-        header_lines, stat_lines = statistic_calculator.calculate(calcmode, regtables, reghands, interval, buyin)
+        header_lines, stat_lines = statistic_calculator.calculate(calcmode, regtables, reghands, interval, buyin, last)
         print_result_lines(header_lines, stat_lines)
 
 
