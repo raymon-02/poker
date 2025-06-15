@@ -1,4 +1,4 @@
-mode=full
+recalc=false
 result=result
 nicknames=MagXedin,noSki1ls
 

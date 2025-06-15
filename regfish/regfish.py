@@ -1026,10 +1026,6 @@ def statistic_mod(last_number):
     return max(1, last_number // 10)
 
 
-def parse_mode(mode):
-    return Mode(mode.strip().lower())
-
-
 def parse_calcmode(mode):
     return CalcMode(mode.strip().lower())
 
@@ -1107,7 +1103,7 @@ def parse_file_args(file):
 
 def parse_args(config_file="config.txt"):
     parser = argparse.ArgumentParser(description="Reg and fish statistic")
-    parser.add_argument("--mode", metavar="mode", help="mode of program run")
+    parser.add_argument("--recalc", metavar="bool", help="full with index or fast statistic")
     parser.add_argument("--result", metavar="path", help="path to result folder")
     parser.add_argument("--nicknames", metavar="name[,name]", help="player nicknames")
     parser.add_argument("--data", metavar="path", help="path to data folder")
@@ -1129,9 +1125,9 @@ def parse_args(config_file="config.txt"):
     args = parser.parse_args()
     config_args = parse_file_args(config_file)
 
-    if not args.mode:
-        args.mode = config_args.get("mode", "full")
-    args.mode = parse_mode(args.mode)
+    if not args.recalc:
+        args.recalc = config_args.get("recalc", "false")
+    args.recalc = parse_bool(args.recalc)
     if not args.result:
         args.result = config_args.get("result", "./")
     if not args.nicknames:
@@ -1260,7 +1256,7 @@ def print_stat_lines(stat_lines, sep=True):
 
 def main():
     args = parse_args()
-    logging.info("Mode of run:                   {}".format(args.mode.name))
+    logging.info("Recalc:                        {}".format(args.recalc))
     logging.info("Result folder:                 {}".format(args.result))
     logging.info("Nicknames:                     {}".format(args.nicknames))
     logging.info("Data folder:                   {}".format(args.data))
@@ -1283,9 +1279,8 @@ def main():
     logging.info("Interactive mode:              {}".format(args.interactive))
     logging.info("")
 
-    if args.mode == Mode.INDEX:
+    if args.recalc:
         index(args.data, args.tsdata, args.result, args.nicknames)
-    elif args.mode == Mode.FULL:
         calculate_full(
             args.result,
             args.calcdata,
