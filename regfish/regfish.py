@@ -62,12 +62,19 @@ class Player(NamedTuple):
     hands: int
 
 
+class EliminatedType(Enum):
+    ME = "me"
+    OTHER = "other"
+    BOTH = "both"
+
+
 class XA(NamedTuple):
     nickname: str
     after_hand: int
+    eliminated_by: EliminatedType
 
 
-NO_XA = XA("", -1)
+NO_XA = XA("", -1, EliminatedType.OTHER)
 
 
 class XAType(Enum):
@@ -104,6 +111,7 @@ class TableStat(NamedTuple):
     file_meta: TableFileMeta
     is_x2: bool
     xa_after_hand: int
+    eliminated_by: EliminatedType
     lost_after_hand: int
 
 
@@ -233,6 +241,7 @@ class IndexCreator:
 
         i = 0
         hand_count = 0
+        prev_hand_nicknames = set()
         while i < len(lines):
             while i < len(lines) and not bool(lines[i].strip()):
                 i += 1
@@ -248,7 +257,20 @@ class IndexCreator:
             xa_inter = xa_nicknames.intersection(self.self_nicknames)
             if xa is None and len(xa_inter) == 1 and len(xa_nicknames) == 2:
                 nickname = next(iter(xa_nicknames.difference(xa_inter)))
-                xa = XA(nickname, hand_count)
+                eliminated_by_nicknames = xa_nicknames.intersection(prev_hand_nicknames)
+                eliminated_by = EliminatedType.OTHER
+                if len(eliminated_by_nicknames) > 1:
+                    eliminated_by = EliminatedType.BOTH
+                elif eliminated_by_nicknames.intersection(self.self_nicknames):
+                    eliminated_by = EliminatedType.ME
+                xa = XA(nickname, hand_count, eliminated_by)
+            while i < len(lines) and not lines[i].startswith("Seat"):
+                i += 1
+            prev_hand_nicknames = set()
+            while i < len(lines) and lines[i].startswith("Seat"):
+                nickname = parse_nickname_summary(lines[i])
+                prev_hand_nicknames.add(nickname)
+                i += 1
             while i < len(lines) and bool(lines[i].strip()):
                 i += 1
             hand_count += 1
@@ -520,7 +542,9 @@ class FullStatisticCalculator(AbstractStatisticCalculator):
             key = (reg, fish)
             xa_after_hand = -1 if table.xa.nickname in regs else table.xa.after_hand
             table_stats[key].append(
-                TableStat(file_to_calc, is_prize_pool_x2(table), xa_after_hand, table.lost_after_hand)
+                TableStat(
+                    file_to_calc, is_prize_pool_x2(table), xa_after_hand, table.xa.eliminated_by, table.lost_after_hand
+                )
             )
             FullStatisticCalculator.__add_to_report__(report, table, key)
             filter_count += 1
@@ -888,7 +912,7 @@ def serialize_table(table):
     players = []
     for i, player in enumerate(table.players):
         players.append("{}:{}".format(player.nickname, player.hands))
-    return "{}|{}|{}|{}|{}|{}:{}|{}".format(
+    return "{}|{}|{}|{}|{}|{}:{}:{}|{}".format(
         table.id,
         table.table_data.timestamp,
         table.table_data.prize_pool,
@@ -896,6 +920,7 @@ def serialize_table(table):
         ",".join(players),
         table.xa.nickname,
         table.xa.after_hand,
+        table.xa.eliminated_by.value,
         table.lost_after_hand
     )
 
@@ -907,8 +932,8 @@ def deserialize_table(line):
     for player in players_str.split(","):
         nickname, hands = player.split(":")
         players.append(Player(nickname.strip(), int(hands.strip())))
-    xa_nickname, xa_after_hands = xa_str.split(":")
-    xa = XA(xa_nickname.strip(), int(xa_after_hands.strip()))
+    xa_nickname, xa_after_hands, xa_eliminated_by = xa_str.split(":")
+    xa = XA(xa_nickname.strip(), int(xa_after_hands.strip()), EliminatedType(xa_eliminated_by))
 
     return Table(int(table_id), table_data, players, xa, int(lost_after_hand))
 
@@ -935,7 +960,9 @@ def sorted_data_files(data_files):
 
 
 def get_folder_bucket_name(table_stat, xa_type):
-    return str(table_stat.xa_after_hand if xa_type == XAType.FISH else table_stat.lost_after_hand)
+    if xa_type == XAType.LOST:
+        return str(table_stat.lost_after_hand)
+    return os.path.join(table_stat.eliminated_by.value, str(table_stat.xa_after_hand))
 
 
 def is_windows():
@@ -985,6 +1012,11 @@ def parse_data_line(line):
 
 def parse_nickname(line):
     return " ".join(line.strip().split()[2:-1])
+
+
+def parse_nickname_summary(line):
+    line = line[:line.find("(")]
+    return " ".join(line.strip().split()[2:])
 
 
 def interval_filter(interval):
@@ -1280,7 +1312,7 @@ def main():
     logging.info("")
 
     if args.recalc:
-        index(args.data, args.tsdata, args.result, args.nicknames)
+        # index(args.data, args.tsdata, args.result, args.nicknames)
         calculate_full(
             args.result,
             args.calcdata,
