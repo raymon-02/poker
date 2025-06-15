@@ -1078,7 +1078,7 @@ def xa_lost_filter(table_stat):
 
 
 def get_buy_in_mp(table, buyinsort):
-    mp = int(table.table_data.prize_pool / table.table_data.buy_in)
+    mp = int(table.table_data.prize_pool / table.table_data.buy_in) if table.table_data.buy_in > 0 else 0
     return "x{}".format(mp) if mp in buyinsort else "rest"
 
 
@@ -1353,7 +1353,7 @@ def main():
     logging.info("")
 
     if args.recalc:
-        index(args.data, args.tsdata, args.result, args.nicknames)
+        # index(args.data, args.tsdata, args.result, args.nicknames)
         calculate_full(
             args.result,
             args.calcdata,
