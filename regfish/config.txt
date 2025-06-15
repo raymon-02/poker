@@ -16,6 +16,7 @@ buyin=all
 last=50
 
 sort=false
+buyinsort=x2,x3,x4,x5
 xa=false
 firsthand=false
 bufolds=false

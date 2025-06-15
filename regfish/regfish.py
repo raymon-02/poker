@@ -111,7 +111,7 @@ class Table(NamedTuple):
 
 class TableStat(NamedTuple):
     file_meta: TableFileMeta
-    is_x2: bool
+    buy_in_mp: str
     xa_after_hand: int
     eliminated_by: EliminatedType
     lost_after_hand: int
@@ -459,12 +459,14 @@ class FullStatisticCalculator(AbstractStatisticCalculator):
     def __init__(self, calcdata, calctsdata, colormarkers, result, original_interval, current_interval):
         super().__init__(calcdata, calctsdata, colormarkers, result, original_interval, current_interval)
 
-    def calculate(self, calcmode, regtables, reghands, interval, buyin, is_sort, is_xa, is_first_hand, is_bu_fold):
+    def calculate(
+            self, calcmode, regtables, reghands, interval, buyin, is_sort, buyinsort, is_xa, is_first_hand, is_bu_fold
+    ):
         logging.info("Run FULL stat calculation")
         files_to_calculate = self.__get_calc_files__()
         colored_players = self.__get_colored_players__()
         table_stats, report = self.__get_stats__(
-            files_to_calculate, calcmode, colored_players, regtables, reghands, interval, buyin
+            files_to_calculate, calcmode, colored_players, regtables, reghands, interval, buyin, buyinsort
         )
         header_lines = self.__get_stat_lines_header__(calcmode, regtables, reghands, interval, buyin)
         reduced_stat_lines, stat_lines = AbstractStatisticCalculator.__get_stat_lines__(
@@ -516,7 +518,9 @@ class FullStatisticCalculator(AbstractStatisticCalculator):
 
         return result
 
-    def __get_stats__(self, files_to_calculate, calcmode, colored_players, regtables, reghands, interval, buyin):
+    def __get_stats__(
+            self, files_to_calculate, calcmode, colored_players, regtables, reghands, interval, buyin, buyinsort
+    ):
         logging.info("Start getting table stats")
 
         table_stats = defaultdict(list)
@@ -554,11 +558,11 @@ class FullStatisticCalculator(AbstractStatisticCalculator):
             table_stats[key].append(
                 TableStat(
                     file_to_calc,
-                    is_prize_pool_x2(table),
+                    get_buy_in_mp(table, buyinsort),
                     xa_after_hand,
                     table.xa.eliminated_by,
                     table.lost_after_hand,
-                    (table.seat % 3) + 1 == reg_player.seat if key == (1, 1) else None
+                    is_reg_left(table, reg_player, key)
                 )
             )
             FullStatisticCalculator.__add_to_report__(report, table, key)
@@ -651,21 +655,14 @@ class FullStatisticCalculator(AbstractStatisticCalculator):
         for (reg, fish), table_stat_buket in table_stats.items():
             logging.info("Copying data files: reg={}, fish={}...".format(reg, fish))
             folder_name = REF_FISH_FOLDER_FORMAT.format(reg, fish)
-            path_data_x2 = os.path.join(path_result_run, folder_name, "x2", "data")
-            path_tsdata_x2 = os.path.join(path_result_run, folder_name, "x2", "tsdata")
-            path_data_rest = os.path.join(path_result_run, folder_name, "rest", "data")
-            path_tsdata_rest = os.path.join(path_result_run, folder_name, "rest", "tsdata")
-            os.makedirs(path_data_x2, exist_ok=True)
-            os.makedirs(path_tsdata_x2, exist_ok=True)
-            os.makedirs(path_data_rest, exist_ok=True)
-            os.makedirs(path_tsdata_rest, exist_ok=True)
             mod = statistic_mod(len(table_stat_buket))
             for i, table_stat in enumerate(table_stat_buket):
                 if i % mod == 0:
-                    logging.info("Copying data files fox x2 and rest {}/{}...".format(i, len(table_stat_buket)))
-                path_data, path_tsdata = (
-                    (path_data_x2, path_tsdata_x2) if table_stat.is_x2 else (path_data_rest, path_tsdata_rest)
-                )
+                    logging.info("Copying data files {}/{}...".format(i, len(table_stat_buket)))
+                path_data = os.path.join(path_result_run, folder_name, table_stat.buy_in_mp, "data")
+                path_tsdata = os.path.join(path_result_run, folder_name, table_stat.buy_in_mp, "tsdata")
+                os.makedirs(path_data, exist_ok=True)
+                os.makedirs(path_tsdata, exist_ok=True)
                 copy_tsdata_file = os.path.join(path_tsdata, table_stat.file_meta.tsdata_file.split(os.sep)[-1])
                 copyfile(table_stat.file_meta.tsdata_file, copy_tsdata_file)
                 for data_file in table_stat.file_meta.data_files:
@@ -1080,8 +1077,13 @@ def xa_lost_filter(table_stat):
     return table_stat.lost_after_hand > 0
 
 
-def is_prize_pool_x2(table):
-    return 2 * int(table.table_data.buy_in) == int(table.table_data.prize_pool)
+def get_buy_in_mp(table, buyinsort):
+    mp = int(table.table_data.prize_pool / table.table_data.buy_in)
+    return "x{}".format(mp) if mp in buyinsort else "rest"
+
+
+def is_reg_left(table, reg_player, key):
+    return (table.seat % 3) + 1 == reg_player.seat if key == (1, 1) else None
 
 
 def statistic_mod(last_number):
@@ -1152,6 +1154,10 @@ def parse_buyin(buyin):
     return float(buyin)
 
 
+def parse_buyin_sort(buyinsort):
+    return set(map(lambda b: int(b.strip()[1:]), buyinsort.split(",")))
+
+
 def parse_file_args(file):
     result = {}
     if os.path.exists(file):
@@ -1180,6 +1186,7 @@ def parse_args(config_file="config.txt"):
     parser.add_argument("--buyin", metavar="value", help="buyin to filter e.g. 5,10,all")
     parser.add_argument("--last", metavar="int", help="calculate stat for last tables additionally")
     parser.add_argument("--sort", metavar="bool", help="sort files into folders")
+    parser.add_argument("--buyinsort", metavar="x2[,x3]", help="list of buyin multipliers to sort")
     parser.add_argument("--xa", metavar="bool", help="sort files by XA")
     parser.add_argument("--firsthand", metavar="bool", help="sort first hands into files")
     parser.add_argument("--bufolds", metavar="bool", help="sort button folds hands into files")
@@ -1239,6 +1246,9 @@ def parse_args(config_file="config.txt"):
     if not args.sort:
         args.sort = config_args.get("sort", "false")
     args.sort = parse_bool(args.sort)
+    if not args.buyinsort:
+        args.buyinsort = config_args.get("buyinsort", "x2")
+    args.buyinsort = parse_buyin_sort(args.buyinsort)
     if not args.xa:
         args.xa = config_args.get("xa", "false")
     args.xa = parse_bool(args.xa)
@@ -1262,13 +1272,13 @@ def index(data, tsdata, result, nicknames):
 
 def calculate_full(
         result, calcdata, calctsdata, colormarkers, calcmode, regtables, reghands,
-        original_interval, current_interval, interval, buyin, is_sort, is_xa, is_first_hand, if_bu_fold
+        original_interval, current_interval, interval, buyin, is_sort, buyinsort, is_xa, is_first_hand, if_bu_fold
 ):
     calculator = FullStatisticCalculator(
         calcdata, calctsdata, colormarkers, result, original_interval, current_interval
     )
     stat_lines = calculator.calculate(
-        calcmode, regtables, reghands, interval, buyin, is_sort, is_xa, is_first_hand, if_bu_fold
+        calcmode, regtables, reghands, interval, buyin, is_sort, buyinsort, is_xa, is_first_hand, if_bu_fold
     )
     print_stat_lines(stat_lines)
 
@@ -1335,6 +1345,7 @@ def main():
     logging.info("Buy-in:                        {}".format(args.buyin))
     logging.info("Last tables:                   {}".format(args.last))
     logging.info("Sort files into folders:       {}".format(args.sort))
+    logging.info("Buy-in sort by:                {}".format(args.buyinsort))
     logging.info("Sort files by XA:              {}".format(args.xa))
     logging.info("Sort hands by first:           {}".format(args.firsthand))
     logging.info("Sort hands by button folds:    {}".format(args.bufolds))
@@ -1342,7 +1353,7 @@ def main():
     logging.info("")
 
     if args.recalc:
-        # index(args.data, args.tsdata, args.result, args.nicknames)
+        index(args.data, args.tsdata, args.result, args.nicknames)
         calculate_full(
             args.result,
             args.calcdata,
@@ -1356,6 +1367,7 @@ def main():
             args.utc_interval,
             args.buyin,
             args.sort,
+            args.buyinsort,
             args.xa,
             args.firsthand,
             args.bufolds
