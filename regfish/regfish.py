@@ -60,6 +60,7 @@ class TableData(NamedTuple):
 class Player(NamedTuple):
     nickname: str
     hands: int
+    seat: int
 
 
 class EliminatedType(Enum):
@@ -102,6 +103,7 @@ class TableFast(NamedTuple):
 class Table(NamedTuple):
     id: int
     table_data: TableData
+    seat: int
     players: list[Player]
     xa: XA
     lost_after_hand: int
@@ -113,6 +115,7 @@ class TableStat(NamedTuple):
     xa_after_hand: int
     eliminated_by: EliminatedType
     lost_after_hand: int
+    is_reg_left: bool
 
 
 class Report(NamedTuple):
@@ -185,9 +188,9 @@ class IndexCreator:
             if not table_data:
                 logging.warning("Cannot get table data from TS file. Skipping: {}".format(file_to_index.tsdata_file))
                 continue
-            players, xa, hand_count = self.__get_data__(file_to_index.data_files)
+            seat, players, xa, hand_count = self.__get_data__(file_to_index.data_files)
             lost_after_hand = 0 if won else hand_count
-            tables.append(Table(file_to_index.id, table_data, players, xa, lost_after_hand))
+            tables.append(Table(file_to_index.id, table_data, seat, players, xa, lost_after_hand))
 
         logging.info("Got {} tables from files".format(len(tables)))
 
@@ -233,6 +236,7 @@ class IndexCreator:
 
     def __get_data__(self, data_files):
         xa = None
+        seats = {}
         counter = Counter()
         lines = []
         for data_file in sorted_data_files(data_files):
@@ -249,7 +253,9 @@ class IndexCreator:
                 i += 1
             xa_nicknames = set()
             while i < len(lines) and lines[i].startswith("Seat"):
-                nickname = parse_nickname(lines[i])
+                seat, nickname = parse_seat_nickname(lines[i])
+                if len(seats) < 3:
+                    seats[nickname] = seat
                 if nickname not in self.self_nicknames:
                     counter[nickname] += 1
                 xa_nicknames.add(nickname)
@@ -275,9 +281,10 @@ class IndexCreator:
                 i += 1
             hand_count += 1
 
-        players = [Player(nickname, count) for nickname, count in counter.items()]
+        seat = seats[next(iter(self.self_nicknames.intersection(seats)))]
+        players = [Player(nickname, count, seats[nickname]) for nickname, count in counter.items()]
 
-        return players, xa if xa else NO_XA, hand_count
+        return seat, players, xa if xa else NO_XA, hand_count
 
     def __write_index__(self, tables, indexed_players):
         logging.info("Saving {} tables into index file...".format(len(tables)))
@@ -531,11 +538,14 @@ class FullStatisticCalculator(AbstractStatisticCalculator):
 
             reg = 0
             fish = 0
-            for nickname in map(lambda player: player.nickname, table.players):
-                if nickname in regs:
+            reg_player = None
+            for player in table.players:
+                if player.nickname in regs:
+                    reg_player = player
                     reg += 1
-                elif self.__is_reg__(nickname, colored_players, calcmode, regtables, reghands):
-                    regs.add(nickname)
+                elif self.__is_reg__(player.nickname, colored_players, calcmode, regtables, reghands):
+                    regs.add(player.nickname)
+                    reg_player = player
                     reg += 1
                 else:
                     fish += 1
@@ -543,7 +553,12 @@ class FullStatisticCalculator(AbstractStatisticCalculator):
             xa_after_hand = -1 if table.xa.nickname in regs else table.xa.after_hand
             table_stats[key].append(
                 TableStat(
-                    file_to_calc, is_prize_pool_x2(table), xa_after_hand, table.xa.eliminated_by, table.lost_after_hand
+                    file_to_calc,
+                    is_prize_pool_x2(table),
+                    xa_after_hand,
+                    table.xa.eliminated_by,
+                    table.lost_after_hand,
+                    (table.seat % 3) + 1 == reg_player.seat if key == (1, 1) else None
                 )
             )
             FullStatisticCalculator.__add_to_report__(report, table, key)
@@ -668,14 +683,19 @@ class FullStatisticCalculator(AbstractStatisticCalculator):
             logging.info("Copying data files for XA: reg={}, fish={}...".format(reg, fish))
             folder_name = REF_FISH_FOLDER_FORMAT.format(reg, fish)
             xa_folder_name = os.path.join(path_result_run, folder_name, "xa")
+            is_one_one = reg == 1 and fish == 1
 
             table_stats_with_xa = list(filter(xa_filter, table_stat_buket))
             xa_fish_filter_out_count += len(table_stat_buket) - len(table_stats_with_xa)
-            FullStatisticCalculator.__copy_xa_type_data_files__(table_stats_with_xa, xa_folder_name, XAType.FISH)
+            FullStatisticCalculator.__copy_xa_type_data_files__(
+                table_stats_with_xa, xa_folder_name, is_one_one, XAType.FISH
+            )
 
             table_stats_with_lost = list(filter(xa_lost_filter, table_stat_buket))
             xa_lost_filter_out_count += len(table_stat_buket) - len(table_stats_with_lost)
-            FullStatisticCalculator.__copy_xa_type_data_files__(table_stats_with_lost, xa_folder_name, XAType.LOST)
+            FullStatisticCalculator.__copy_xa_type_data_files__(
+                table_stats_with_lost, xa_folder_name, is_one_one, XAType.LOST
+            )
 
             logging.info("Copied data files for XA: reg={}, fish={}".format(reg, fish))
 
@@ -684,10 +704,14 @@ class FullStatisticCalculator(AbstractStatisticCalculator):
         logging.info("Copied data files for XA")
 
     @staticmethod
-    def __copy_xa_type_data_files__(table_stat_buket, xa_folder_name, xa_type):
-        folder_name = os.path.join(xa_folder_name, xa_type.value)
+    def __copy_xa_type_data_files__(table_stat_buket, xa_folder_name, is_one_one, xa_type):
         mod = statistic_mod(len(table_stat_buket))
         for i, table_stat in enumerate(table_stat_buket):
+            if is_one_one:
+                reg_folder_name = "regleft" if table_stat.is_reg_left else "regright"
+                folder_name = os.path.join(xa_folder_name, reg_folder_name, xa_type.value)
+            else:
+                folder_name = os.path.join(xa_folder_name, xa_type.value)
             folder_bucket_name = get_folder_bucket_name(table_stat, xa_type)
             path_data = os.path.join(folder_name, folder_bucket_name, "data")
             path_tsdata = os.path.join(folder_name, folder_bucket_name, "tsdata")
@@ -904,19 +928,20 @@ class FastStatisticCalculator(AbstractStatisticCalculator):
             i += 1
 
         table_data = TableData(timestamp, 0, buy_in)
-        players = [Player(nickname, 0) for nickname in players]
+        players = [Player(nickname, 0, 0) for nickname in players]
         return TableFast(file_to_calc.id, table_data, players)
 
 
 def serialize_table(table):
     players = []
     for i, player in enumerate(table.players):
-        players.append("{}:{}".format(player.nickname, player.hands))
-    return "{}|{}|{}|{}|{}|{}:{}:{}|{}".format(
+        players.append("{}:{}:{}".format(player.nickname, player.hands, player.seat))
+    return "{}|{}|{}|{}|{}|{}|{}:{}:{}|{}".format(
         table.id,
         table.table_data.timestamp,
         table.table_data.prize_pool,
         table.table_data.buy_in,
+        table.seat,
         ",".join(players),
         table.xa.nickname,
         table.xa.after_hand,
@@ -926,16 +951,16 @@ def serialize_table(table):
 
 
 def deserialize_table(line):
-    table_id, timestamp, prize_pool, buy_in, players_str, xa_str, lost_after_hand = line.split("|")
+    table_id, timestamp, prize_pool, buy_in, seat_str, players_str, xa_str, lost_after_hand = line.split("|")
     table_data = TableData(timestamp, float(prize_pool), float(buy_in))
     players = []
     for player in players_str.split(","):
-        nickname, hands = player.split(":")
-        players.append(Player(nickname.strip(), int(hands.strip())))
+        nickname, hands, seat = player.split(":")
+        players.append(Player(nickname.strip(), int(hands.strip()), int(seat.strip())))
     xa_nickname, xa_after_hands, xa_eliminated_by = xa_str.split(":")
     xa = XA(xa_nickname.strip(), int(xa_after_hands.strip()), EliminatedType(xa_eliminated_by))
 
-    return Table(int(table_id), table_data, players, xa, int(lost_after_hand))
+    return Table(int(table_id), table_data, int(seat_str), players, xa, int(lost_after_hand))
 
 
 def serialize_indexed_player(index_player):
@@ -1008,6 +1033,11 @@ def parse_data_line(line):
     i = line_split.index("buyIn:")
     buy_in = parse_price(line_split[i + 1]) + parse_price(line_split[i + 3])
     return timestamp, buy_in
+
+
+def parse_seat_nickname(line):
+    line_split = line.strip().split()
+    return int(line_split[1][:-1]), " ".join(line_split[2:-1])
 
 
 def parse_nickname(line):
