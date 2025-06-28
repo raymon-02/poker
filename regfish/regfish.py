@@ -1353,7 +1353,7 @@ def main():
     logging.info("")
 
     if args.recalc:
-        # index(args.data, args.tsdata, args.result, args.nicknames)
+        index(args.data, args.tsdata, args.result, args.nicknames)
         calculate_full(
             args.result,
             args.calcdata,
